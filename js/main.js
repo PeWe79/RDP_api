@@ -3,8 +3,8 @@
 
     // --- [CONFIGURAÇÕES] ----------------------------------------------- 
 
-    const API_KEY_LYRICS = "1637b78dc3b129e6843ed674489a92d0";
-    const API_URL = "https://twj.es/free/?url=";
+    // Endpoint direto — o antigo /free/ respondia com redirect 301 a cada poll
+    const API_URL = "https://api.twj.es/?url=";
     const TIME_TO_REFRESH = window?.streams?.timeRefresh || 10000;
 
     // --- [CONSTANTES E VARIÁVEIS] --------------------------------------
@@ -341,17 +341,47 @@
 
 
     const getLyrics = async (artist, name) => {
+        // 1ª tentativa: lyrics.ovh (a API do Vagalume foi descontinuada)
         try {
-            const response = await fetch(`https://api.vagalume.com.br/search.php?apikey=${API_KEY_LYRICS}&art=${encodeURIComponent(artist)}&mus=${encodeURIComponent(name)}`);
+            const response = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(name)}`);
             const data = await response.json();
-            if (data.type === "exact" || data.type === "aprox") {
-                const lyrics = data.mus[0].text;
-                return lyrics;
-            } else {
-                return "Letra no disponible";
+            if (data && data.lyrics) {
+                return data.lyrics;
             }
+            console.log("lyrics.ovh não encontrou a letra. Tentando LRCLIB...");
         } catch (error) {
-            console.error("Error fetching lyrics:", error);
+            console.error("Erro na API lyrics.ovh:", error);
+        }
+
+        // Identificação de cliente que a documentação do LRCLIB pede
+        // (User-Agent não pode ser alterado pelo navegador; este é o equivalente)
+        const lrclibHeaders = { "Lrclib-Client": "RadioplayerApi (https://github.com/jailsonsb2/Radioplayer_api)" };
+
+        // 2ª tentativa: LRCLIB /api/get — match exato por assinatura.
+        // De propósito NÃO enviamos duration: quando presente, o LRCLIB exige
+        // match de ±2s e descartaria letras válidas
+        try {
+            const response = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(name)}`, { headers: lrclibHeaders });
+            if (response.ok) {
+                const data = await response.json();
+                const lyrics = data.plainLyrics || data.syncedLyrics;
+                if (lyrics) return lyrics;
+            }
+            console.log("LRCLIB /get não encontrou a letra. Tentando /search...");
+        } catch (error) {
+            console.error("Erro na API LRCLIB (/get):", error);
+        }
+
+        // 3ª tentativa: LRCLIB /api/search — busca por palavras-chave,
+        // tolera diferenças de grafia no título/artista
+        try {
+            const response = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(name)}&artist_name=${encodeURIComponent(artist)}`, { headers: lrclibHeaders });
+            if (!response.ok) throw new Error("LRCLIB não respondeu");
+            const results = await response.json();
+            const hit = Array.isArray(results) && results.find((r) => r.plainLyrics || r.syncedLyrics);
+            return (hit && (hit.plainLyrics || hit.syncedLyrics)) || "Letra no disponible";
+        } catch (error) {
+            console.error("Erro na API LRCLIB (/search):", error);
             return "Letra no disponible";
         }
     };
@@ -369,9 +399,10 @@
           title = api.song;
           artist = api.artist;
         } else if (api.songtitle && api.songtitle.includes(" - ")) {
-          title = api.songtitle.split(" - ")[0];
-          artist = api.songtitle.split(" - ")[1];
-        } else if (api.now_playing) {
+          // Convenção ICY: "Artista - Título" (mesma usada pela API em twj.es)
+          artist = api.songtitle.split(" - ")[0];
+          title = api.songtitle.split(" - ")[1];
+        } else if (api.now_playing && api.now_playing.song) {
           title = api.now_playing.song.title;
           artist = api.now_playing.song.artist;
         } else if (api.artist && api.title) {
@@ -755,6 +786,8 @@
     function initApp() {
         // Variables para almacenar información que se actualizará
         let currentSongPlaying;
+        let lastAlbumArt = "";
+        let lastLyricsKey = "";
         let timeoutId;
         const json = window.streams || {};
         const stations = json.stations;
@@ -781,43 +814,68 @@
                 currentStation = current;
             }
             const server = currentStation.server || "itunes";
-            //const jsonUri = currentStation.api || API_URL + encodeURIComponent(current.stream_url);
-            const jsonUri = currentStation.api || API_URL + current.stream_url;
+            const jsonUri = currentStation.api || API_URL + encodeURIComponent(current.stream_url);
             fetch(jsonUri)
                 .then((response) => response.json())
                 .then(async (res) => {
-                    console.log(res);
-                    const current = normalizeTitle(res);
-                    console.log(current);
-    
-                    // Se currentSong for diferente da música atual, atualiza a informação
-                    const title = current.title;
-                    if (currentSongPlaying !== title) {
-                        // Atualizar a música atual
-                        currentSongPlaying = title;
-                        let artist = current.artist;
-                        const art = currentStation.album;
-                        const cover = currentStation.cover;
-                        const history = normalizeHistory(res);
-    
-                        // Verificar se o título e o artista não são undefined
-                        if (title && artist) {
-                            const dataFrom = await getDataFrom({
+                    const currentData = normalizeTitle(res);
+                    const title = currentData.title;
+
+                    // O songtitle cru é estável entre a resposta imediata e a
+                    // enriquecida (iTunes) da API — comparar o título normalizado
+                    // processava a mesma música duas vezes
+                    const songKey = res.songtitle || title;
+                    const artKey = res.albumArt || "";
+                    if (currentSongPlaying === songKey && lastAlbumArt === artKey) {
+                        return;
+                    }
+                    currentSongPlaying = songKey;
+                    lastAlbumArt = artKey;
+
+                    let artist = currentData.artist;
+                    const art = currentStation.album;
+                    const cover = currentStation.cover;
+                    const history = normalizeHistory(res);
+
+                    // Verificar se o título e o artista não são undefined
+                    if (title && artist) {
+                        let dataFrom;
+                        if (res.albumArt) {
+                            // A API já entrega capa/álbum prontos na resposta;
+                            // refazer a busca no search.php só atrasava a capa
+                            dataFrom = {
+                                title: res.song || title,
+                                artist: res.artist || artist,
+                                album: res.album || "",
+                                thumbnail: res.albumArt,
+                                art: res.albumArt,
+                                cover: res.albumArt.replace("600x600", "1500x1500"),
+                                stream_url: res.streamUrl || "#not-found",
+                            };
+                            cache[`${dataFrom.artist} - ${dataFrom.title}`.toLowerCase()] = dataFrom;
+                        } else {
+                            dataFrom = await getDataFrom({
                                 artist,
                                 title,
                                 art,
                                 cover,
                                 server,
                             });
-    
-                            // Estabelecer dados da música atual
-                            currentSong(dataFrom);
-                            mediaSession(dataFrom);
-                            setLyrics(dataFrom.artist, dataFrom.title);
-                            setHistory(history, currentStation, server);
-                        } else {
-                            console.log("Título ou artista undefined, não será feita a busca pela capa do álbum.");
                         }
+
+                        // Estabelecer dados da música atual
+                        currentSong(dataFrom);
+                        mediaSession(dataFrom);
+
+                        const lyricsKey = `${dataFrom.artist} - ${dataFrom.title}`.toLowerCase();
+                        if (lyricsKey !== lastLyricsKey) {
+                            lastLyricsKey = lyricsKey;
+                            setLyrics(dataFrom.artist, dataFrom.title);
+                        }
+
+                        setHistory(history, currentStation, server);
+                    } else {
+                        console.log("Título ou artista undefined, não será feita a busca pela capa do álbum.");
                     }
                 })
                 .catch((error) => console.log(error));
