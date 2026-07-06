@@ -149,3 +149,17 @@ The sections regarding:
 
 
 
+---
+
+## 📜 History
+
+First published in mid-2024, this project descends from one of the first open-source "now playing" metadata APIs for web radio players written in plain PHP ([RadioplayerAPI](https://github.com/jailsonsb2/RadioplayerAPI), June 2024). The response format it introduced — `songtitle`, `artist`, `song`, `source`, `song_history` — has since been widely adopted across the web radio ecosystem, including by third-party commercial products.
+---
+
+## ⚖️ License
+
+This project is licensed under the **GNU AGPL-3.0** (see [LICENSE](LICENSE)): you are free to use, modify and redistribute it — including commercially — provided derivative works remain open source and keep the original copyright notices, **even when offered only as a hosted/network service**.
+
+**Closed-source / commercial licensing:** to embed this code in a proprietary product without AGPL obligations, a separate commercial license is available — contact [contato@jailson.es](mailto:contato@jailson.es).
+
+Copyright (C) 2024-2026 Jailson Bezerra ([@jailsonsb2](https://github.com/jailsonsb2))
