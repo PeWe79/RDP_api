@@ -38,9 +38,11 @@
     const audio = new Audio();
     audio.crossOrigin = "anonymous";
     let hasVisualizer = false;
+    // Impede que um 'canplay' atrasado religue o áudio pausado de propósito
+    let isIntentionalPause = false;
 
 
-    // --- [FUNÇÕES UTILITÁRIAS] ----------------------------------------- 
+    // --- [FUNÇÕES UTILITÁRIAS] -----------------------------------------
 
     function createElementFromHTML(htmlString) {
         const div = document.createElement("div");
@@ -77,17 +79,21 @@
     }
     
     function play(audio, newSource = null) {
+        isIntentionalPause = false;
         if (newSource) {
             audio.src = newSource;
         }
 
-        // Adiciona evento 'canplay' para garantir que o áudio pode ser reproduzido
+        // 'once: true' — cada chamada registrava um listener novo que nunca
+        // era removido; qualquer 'canplay' posterior (re-buffer do stream ao
+        // vivo) religava o áudio mesmo depois de pausado (ex.: com a TV aberta)
         audio.addEventListener('canplay', () => {
+            if (isIntentionalPause) return;
             audio.play();
             playButton.innerHTML = icons.pause;
             playButton.classList.add("is-active");
             document.body.classList.add("is-playing");
-        }); 
+        }, { once: true });
 
         if (!hasVisualizer) {
             visualizer(audio, visualizerContainer);
@@ -98,6 +104,7 @@
     }
 
     function pause(audio) {
+        isIntentionalPause = true;
         audio.pause();
         playButton.innerHTML = icons.play;
         playButton.classList.remove("is-active");
@@ -498,6 +505,7 @@
         $button.innerHTML = icons.tv + "Tv ao vivo";
         $button.addEventListener("click", () => {
             playerTvModal.classList.add("is-active");
+            const wasPlaying = !audio.paused;
             pause(audio);
             const modalBody = playerTvModal.querySelector(".modal-body-video");
             const closeButton = playerTvModal.querySelector("[data-close]");
@@ -505,12 +513,18 @@
             $iframe.src = url;
             $iframe.allowFullscreen = true;
             modalBody.appendChild($iframe);
+            // once: true — sem isso cada abertura da TV acumulava um listener
             closeButton.addEventListener("click", () => {
                 playerTvModal.classList.remove("is-active");
 
                 // al terminar de cerrar el modal, eliminar el iframe
                 $iframe.remove();
-            });
+
+                // Retoma a rádio (no ponto ao vivo) se estava tocando antes
+                if (wasPlaying) {
+                    play(audio, currentStation.stream_url);
+                }
+            }, { once: true });
         });
         playerTv.appendChild($button);
     }
