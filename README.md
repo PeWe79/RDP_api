@@ -132,16 +132,16 @@ Get real-time metadata from online radio streams — free, no key required. Leav
 
 ### Available Endpoints
 
-* `/start_monitoring/` **(GET):** Starts monitoring a radio stream. You must start monitoring before retrieving information.
-    - **Required parameter:** `radio_url` — the URL of the radio stream.
-* `/get_stream_title/` **(GET):** Retrieves the current song's title and album art from the radio stream.
-    - **Required parameter:** `url` — the URL of the radio stream.
-* `/radio_info/` **(GET):** Real-time information about the station, including the current song and recent history.
-    - **Required parameter:** `radio_url` — the URL of the radio stream.
-* `/radio_history/` **(GET):** Full song history from the database for a given station.
-    - **Required parameter:** `radio_url`; **optional:** `limit`.
+Base URL: `https://api.twj.es`
 
-**Example:** `https://twj.es/radio_info/?radio_url=https://example.com/stream`
+* `/` **(GET):** Current song and recent history as JSON (`songtitle`, `artist`, `song`, `source`, `song_history`). Shared 5-second cache — safe to poll. This is what the player uses by default.
+    - **Required parameter:** `url` — the URL of the radio stream.
+* `/stream.php` **(GET, SSE):** Same data pushed in real time via Server-Sent Events — connect with `EventSource` instead of polling.
+    - **Required parameter:** `url` — the URL of the radio stream.
+* `/search.php` **(GET):** Album art lookup for a song.
+    - **Required parameter:** `query` — e.g. `Artist - Song`.
+
+**Example:** `https://api.twj.es/?url=https://example.com/stream`
 
 ## Contributing
 
