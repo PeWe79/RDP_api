@@ -13,7 +13,7 @@ It ships with **three ready-to-use layouts ("versions")** sharing the same engin
 | id | File | Description |
 |---|---|---|
 | `retro` | `index-redesign.html` | **Retrô Glass** — new redesign: frosted glass, dynamic accent color extracted from the album art |
-| `classico` | `index-classic.html` | **Clássico** — the original player look |
+| `classic` | `index-classic.html` | **Clássico** — the original player look |
 | `aurora` | `index-alt.html` | **Aurora Deck** — alternative deck-style UI |
 
 All three read the same `config.js` and the same `js/main.js`, so switching layout never means reconfiguring your stations.
@@ -24,13 +24,13 @@ Everything is set in **`config.js`**:
 
 ```javascript
 window.streams = {
-    layout: "retro",        // "retro" | "classico" | "aurora"
+    layout: "retro",        // "retro" | "classic" | "aurora"
     timeRefresh: 10000,
     stations: [ /* ... */ ],
 };
 ```
 
-* **`layout`** — which design `index.html` loads. English aliases also work (`classic`, `redesign`, `alt`).
+* **`layout`** — which design `index.html` loads. The aliases `classico`, `redesign` and `alt` are also accepted.
 * **Direct file:** you can also deploy/open `index-redesign.html`, `index-classic.html` or `index-alt.html` directly — each one works standalone.
 
 ## Features
