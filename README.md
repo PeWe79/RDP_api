@@ -87,6 +87,7 @@ window.streams = {
 | `album` | ✔ | Default cover shown before the real album art loads. |
 | `cover` | ✔ | Fallback cover for the current song. |
 | `stream_url` | ✔ | Audio stream URL. |
+| `frequency` | | Real FM frequency shown on the **retro** layout dial (e.g. `"87.9"`; comma also accepted). If omitted, a frequency is assigned automatically across the band. |
 | `api` | | Custom metadata endpoint. Leave `""` to use the free built-in web API (`api.twj.es`). |
 | `server` | | `"spotify"` or `"itunes"` — extra source for album art lookup. |
 | `tv_url` | | Live video stream URL — enables the TV button/modal. |
