@@ -25,15 +25,12 @@ Everything is set in **`config.js`**:
 ```javascript
 window.streams = {
     layout: "retro",        // "retro" | "classico" | "aurora"
-    layoutSwitcher: true,   // floating pill on index.html to switch layouts
     timeRefresh: 10000,
     stations: [ /* ... */ ],
 };
 ```
 
-* **`layout`** — which design `index.html` loads by default. English aliases also work (`classic`, `redesign`, `alt`).
-* **`layoutSwitcher`** — set to `false` to hide the floating selector and lock visitors to the layout you chose; set to `true` to let them switch (their choice is remembered).
-* **Direct link:** `index.html?layout=aurora` opens a specific layout regardless of the default.
+* **`layout`** — which design `index.html` loads. English aliases also work (`classic`, `redesign`, `alt`).
 * **Direct file:** you can also deploy/open `index-redesign.html`, `index-classic.html` or `index-alt.html` directly — each one works standalone.
 
 ## Features
@@ -61,7 +58,6 @@ window.streams = {
 // config.js — minimal example
 window.streams = {
     layout: "retro",
-    layoutSwitcher: false,
     timeRefresh: 10000,
     stations: [
         {
@@ -114,7 +110,7 @@ The player highlights the slot that is on air right now and lists the full week 
 ## File Structure
 
 * **`config.js`** — all your settings (layout choice + stations). The only file you need to edit.
-* **`index.html`** — loader: reads `config.js`, shows the chosen layout (and the optional layout switcher).
+* **`index.html`** — loader: reads `config.js` and shows the chosen layout.
 * **`index-redesign.html` / `index-classic.html` / `index-alt.html`** — the three layouts (each also works standalone).
 * **`gerador.html`** — visual generator for `config.js` (runs locally in your browser).
 * **`js/main.js`** — the shared player engine (audio, metadata polling/SSE, lyrics, history, schedule, media session).

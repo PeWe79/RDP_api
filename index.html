@@ -20,149 +20,49 @@
     <style>
       html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0a0a; }
       #layout-frame { display: block; border: 0; width: 100%; height: 100%; }
-
-      /* seletor flutuante de layouts — mesmo vidro fosco/pílula translúcida
-         que os três layouts usam nos próprios botões (.btn / .rp-onair /
-         .deck-station), com o brilho ativo seguindo --vitrine-accent, que o
-         script abaixo sincroniza com o --accent (cor da capa) do layout
-         carregado no iframe. */
-      .vitrine-nav {
-        --vitrine-accent: #8b7cf0;
-        position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 99;
-        display: flex; gap: 2px; padding: 5px; border-radius: 999px;
-        background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
-        backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
-        box-shadow: 0 20px 45px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.12);
-        transition: box-shadow .4s ease;
-      }
-      .vitrine-nav[hidden] { display: none; }
-      .vitrine-nav button {
-        font: 600 12px/1 Montserrat, system-ui, sans-serif;
-        letter-spacing: .03em; white-space: nowrap;
-        color: rgba(255,255,255,.62); background: transparent; border: none;
-        padding: 10px 16px; border-radius: 999px; cursor: pointer;
-        transition: color .25s ease, background .25s ease, box-shadow .25s ease;
-      }
-      .vitrine-nav button:hover { color: #fff; background: rgba(255,255,255,.08); }
-      .vitrine-nav button.is-active {
-        color: #fff;
-        background: linear-gradient(135deg, var(--vitrine-accent), color-mix(in srgb, var(--vitrine-accent) 60%, #fff 15%));
-        box-shadow: 0 8px 22px -4px var(--vitrine-accent), inset 0 1px 0 rgba(255,255,255,.3);
-      }
-      @media (max-width: 480px) {
-        .vitrine-nav { top: auto; bottom: 14px; }   /* celular: topo é do player */
-        .vitrine-nav button { font-size: 11px; padding: 9px 13px; }
-      }
     </style>
   </head>
 
   <body>
-    <nav class="vitrine-nav" id="vitrine-nav" aria-label="Escolher layout" hidden></nav>
     <iframe id="layout-frame" title="Player" allow="autoplay"></iframe>
 
     <script>
       // ================================================================
       // The layout ("version") is chosen in config.js:
-      //   window.streams.layout          -> which design to load
-      //   window.streams.layoutSwitcher  -> show/hide the floating pill
-      // Direct links also work: index.html?layout=<id>
+      //   window.streams.layout -> which design to load
       // ================================================================
       var LAYOUTS = [
-        { id: "retro",    nome: "Retrô Glass", file: "index-redesign.html" },
-        { id: "classico", nome: "Clássico",    file: "index-classic.html" },
-        { id: "aurora",   nome: "Aurora Deck", file: "index-alt.html" },
+        { id: "retro",    file: "index-redesign.html" },
+        { id: "classico", file: "index-classic.html" },
+        { id: "aurora",   file: "index-alt.html" },
       ];
-      // aliases aceitos em config.js / ?layout= (inglês ou português)
+      // aliases aceitos em config.js (inglês ou português)
       var ALIASES = { classic: "classico", redesign: "retro", alt: "aurora" };
 
       (function () {
         var cfg = window.streams || {};
-        var SWITCHER = cfg.layoutSwitcher !== false; // default: visible
-        var LAYOUT_PADRAO = String(cfg.layout || "retro").toLowerCase();
+        var id = String(cfg.layout || "retro").toLowerCase();
+        id = ALIASES[id] || id;
+
+        var layout = LAYOUTS[0];
+        for (var i = 0; i < LAYOUTS.length; i++) {
+          if (LAYOUTS[i].id === id) { layout = LAYOUTS[i]; break; }
+        }
 
         var frame = document.getElementById("layout-frame");
-        var nav = document.getElementById("vitrine-nav");
+        frame.src = layout.file;
 
-        function byId(id) {
-          if (!id) return null;
-          id = ALIASES[id] || id;
-          for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].id === id) return LAYOUTS[i];
-          return null;
-        }
-        function byFile(file) {
-          for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].file === file) return LAYOUTS[i];
-          return null;
-        }
-
-        // botões do seletor (só quando o switcher está habilitado)
-        if (SWITCHER) {
-          nav.hidden = false;
-          LAYOUTS.forEach(function (l) {
-            var btn = document.createElement("button");
-            btn.textContent = l.nome;
-            btn.dataset.id = l.id;
-            btn.addEventListener("click", function () { show(l, true); });
-            nav.appendChild(btn);
-          });
-        }
-
-        function mark(l) {
-          if (!SWITCHER) return;
-          nav.querySelectorAll("button").forEach(function (b) {
-            b.classList.toggle("is-active", b.dataset.id === l.id);
-          });
-          try { localStorage.setItem("vitrine-layout", l.id); } catch (e) {}
-          var params = new URLSearchParams(location.search);
-          params.set("layout", l.id);
-          history.replaceState(null, "", "?" + params.toString());
-        }
-
-        function show(l, reload) {
-          mark(l);
-          if (reload || !frame.src) frame.src = l.file;
-        }
-
-        // acompanha a cor de destaque (--accent) que o main.js extrai da capa
-        // do álbum em cada layout, pra pílula ativa do seletor brilhar na
-        // mesma cor da página carregada em vez de ficar sempre roxa
-        var accentObserver = null;
-        function syncAccent() {
-          try {
-            var root = frame.contentDocument.documentElement;
-            var accent = getComputedStyle(root).getPropertyValue("--accent").trim();
-            nav.style.setProperty("--vitrine-accent", accent || "#8b7cf0");
-          } catch (e) {}
-        }
-
-        // espelha o título do layout ativo (o redesign o atualiza por estação)
+        // espelha o título do layout (o redesign o atualiza por estação)
         frame.addEventListener("load", function () {
           try {
             var doc = frame.contentDocument;
-            // navegação interna entre layouts: re-sincroniza o seletor
-            var current = byFile(doc.location.pathname.split("/").pop());
-            if (current) mark(current);
             document.title = doc.title || document.title;
             var t = doc.querySelector("title");
             if (t) new MutationObserver(function () {
               document.title = doc.title;
             }).observe(t, { childList: true });
-
-            syncAccent();
-            if (accentObserver) accentObserver.disconnect();
-            accentObserver = new MutationObserver(syncAccent);
-            accentObserver.observe(doc.documentElement, { attributes: true, attributeFilter: ["style"] });
           } catch (e) {}
         });
-
-        // escolha inicial: ?layout=  >  última escolha salva (se o switcher
-        // está habilitado)  >  config.js  >  primeiro da lista
-        var saved = null;
-        if (SWITCHER) {
-          try { saved = localStorage.getItem("vitrine-layout"); } catch (e) {}
-        }
-        var initial = byId(new URLSearchParams(location.search).get("layout"))
-          || byId(saved) || byId(LAYOUT_PADRAO) || LAYOUTS[0];
-        show(initial, true);
       })();
     </script>
   </body>

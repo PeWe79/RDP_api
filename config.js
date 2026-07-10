@@ -13,15 +13,9 @@ window.streams = {
     //   "retro"   -> index-redesign.html (Retrô Glass — new redesign)
     //   "classic" -> index-classic.html  (Clássico — original player)
     //   "aurora"  -> index-alt.html      (Aurora Deck — alternative UI)
-    // You can also open any of those files directly, or link to a
-    // specific one with index.html?layout=<id>.
+    // You can also open any of those files directly.
     // ----------------------------------------------------------------
     layout: "retro",
-
-    // Show the floating layout switcher pill on index.html?
-    // true  -> visitors can switch between the three layouts
-    // false -> index.html silently loads `layout` above, no switcher
-    layoutSwitcher: true,
 
     // Metadata refresh interval (ms) when the API does not push updates
     timeRefresh: 10000,

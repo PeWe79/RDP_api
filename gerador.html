@@ -206,10 +206,6 @@
                     <option value="aurora">Aurora Deck</option>
                 </select>
             </label>
-            <label style="flex-direction: row; align-items: center; gap: 8px; color: var(--text);">
-                <input id="layout-switcher" type="checkbox" checked style="width: auto;">
-                Mostrar seletor flutuante de layouts no index.html
-            </label>
         </fieldset>
 
         <div class="actions">
@@ -480,7 +476,6 @@
 
         const config = {
             layout: document.getElementById("layout-select").value,
-            layoutSwitcher: document.getElementById("layout-switcher").checked,
             timeRefresh: Number(document.getElementById("time-refresh").value) || 10000,
             stations: cards.map(readStation),
         };
