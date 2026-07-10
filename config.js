@@ -25,6 +25,9 @@ window.streams = {
             name: "Jailson Webradio",
             hash: "jailson",
             description: "Música sem parar",
+            // Optional: real FM frequency shown on the "retro" layout dial
+            // (e.g. "87.9"). Leave it out to auto-assign one across the band.
+            frequency: "",
             logo: "assets/jailson_logo.png",
             album: "assets/jailson_cover.png",
             cover: "assets/jailson_cover.png",

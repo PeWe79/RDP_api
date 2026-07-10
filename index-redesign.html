@@ -393,7 +393,8 @@
             var FMIN = 88,
                FMAX = 108;
             function pct(f) {
-               return ((f - FMIN) / (FMAX - FMIN)) * 100;
+               var p = ((f - FMIN) / (FMAX - FMIN)) * 100;
+               return Math.max(0, Math.min(100, p));
             }
 
             // build ruler ticks
@@ -429,10 +430,15 @@
             tick();
             setInterval(tick, 15000);
 
-            // assign a frequency to each station, evenly across the band
+            // use the station's real frequency when set in config.js;
+            // otherwise assign one automatically, evenly across the band
             var stations = (window.streams && window.streams.stations) || [];
             var n = stations.length;
             var freqs = stations.map(function (s, i) {
+               var f = parseFloat(
+                  String(s.frequency == null ? "" : s.frequency).replace(",", "."),
+               );
+               if (isFinite(f) && f > 0) return +f.toFixed(1);
                return n > 1 ? +(90 + i * (16 / (n - 1))).toFixed(1) : 98.0;
             });
 
