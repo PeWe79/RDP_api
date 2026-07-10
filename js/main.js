@@ -1,17 +1,37 @@
 (function () {
     "use strict";
 
-    // --- [CONFIGURAÇÕES] ----------------------------------------------- 
+    // --- [CONFIGURAÇÕES] -----------------------------------------------
 
-    // Endpoint direto — o antigo /free/ respondia com redirect 301 a cada poll
-    const API_URL = "https://api.twj.es/?url=";
-    const TIME_TO_REFRESH = window?.streams?.timeRefresh || 10000;
+    // Desligado de propósito: cada conexão SSE em stream.php prende um worker
+    // do Apache por até 30min, e o servidor atual (~1GB RAM, compartilhado
+    // entre várias rádios) não aguenta isso sob carga — foi o que causou a
+    // instabilidade de 2026-07-08. Voltar a true quando o servidor da API for
+    // mais robusto (mais RAM/workers, ou uma reescrita do stream.php que não
+    // segure o processo). Com false, vai direto pro polling (API_URL_POLL).
+    const SSE_ENABLED = false;
+    const API_URL = "https://api.twj.es/stream.php?url=";
+    // Endpoint de consulta única (index.php) — cache compartilhado de 5s no
+    // Redis, responde em milissegundos. Usado no fallback de polling: cair
+    // de volta para /stream.php ali seria pedir SSE de novo por fetch(), e
+    // cada conexão SSE prende um worker do Apache por até 30 minutos — em
+    // vez de aliviar um servidor sob carga, isso pioraria o problema.
+    const API_URL_POLL = "https://api.twj.es/?url=";
+    // Intervalo de consulta usado quando a API não fala SSE (ex.: painéis de
+    // terceiros que só respondem JSON puro) — mesmo padrão do main_.js antigo
+    const TIME_TO_REFRESH = (window.streams && window.streams.timeRefresh) || 10000;
+    // Rede de segurança (não é a detecção principal, veja onerror em startSSE):
+    // a API padrão pode legitimamente demorar dezenas de segundos até o
+    // primeiro push, então esse prazo precisa ser folgado.
+    const SSE_FALLBACK_TIMEOUT = 45000;
 
     // --- [CONSTANTES E VARIÁVEIS] --------------------------------------
 
     const buttons = document.querySelectorAll("[data-outside]");
     const ACTIVE_CLASS = "is-active";
     const cache = {};
+
+    const lyricsCache = {};
 
     const playButton = document.querySelector(".player-button-play");
     const visualizerContainer = document.querySelector(".visualizer");
@@ -27,22 +47,35 @@
     const playerTv = document.querySelector(".footer-tv");
     const playerTvModal = document.getElementById("modal-tv");
     const playerProgram = document.querySelector(".player-program");
+    const programacaoButton = document.querySelector('[data-outside="offcanvas-programacao"]');
+    const programacaoList = document.getElementById("programacao-list");
     const lyricsContent = document.getElementById("lyrics");
     const history = document.getElementById("history");
 
     let currentStation;
     let activeButton;
     let currentSongPlaying;
-    let timeoutId; 
+    let lastAlbumArt = "";
+    let lastLyricsKey = "";
+    let lastProgramSignature = null;
+    
+    // --- [VARIÁVEIS DE ESTADO (RESILIÊNCIA, SSE E ÁUDIO)] -------------
+    let isIntentionalPause = true;
+    let reconnectAttempts = 0;
+    let reconnectTimeout = null;
+    let sseConnection = null;
+    let sseFallbackTimer = null;
+    let pollTimeoutId = null;
+    // Geração do polling: um fetch em voo da estação anterior não pode
+    // processar resposta nem se reagendar depois da troca de estação
+    let pollGeneration = 0;
+    let fadeInterval = null; // Variável para controlar o fade in/out
 
     const audio = new Audio();
     audio.crossOrigin = "anonymous";
     let hasVisualizer = false;
-    // Impede que um 'canplay' atrasado religue o áudio pausado de propósito
-    let isIntentionalPause = false;
 
-
-    // --- [FUNÇÕES UTILITÁRIAS] -----------------------------------------
+    // --- [FUNÇÕES UTILITÁRIAS] ----------------------------------------- 
 
     function createElementFromHTML(htmlString) {
         const div = document.createElement("div");
@@ -68,47 +101,122 @@
         });
     }
 
-    // --- [FUNÇÕES DE MANIPULAÇÃO DE ÁUDIO] ----------------------------
+    // --- [MELHORIA 2: FADE IN / FADE OUT SUAVE] -------------------------
+
+    function fadeOut(callback) {
+        if (fadeInterval) clearInterval(fadeInterval);
+        let currentVol = audio.volume;
+        let step = currentVol / 15; // Divide o volume atual em 15 passos
+        
+        fadeInterval = setInterval(() => {
+            currentVol -= step;
+            if (currentVol <= 0.05) {
+                audio.volume = 0;
+                clearInterval(fadeInterval);
+                if (callback) callback(); // Pausa o áudio só depois de baixar o volume
+            } else {
+                audio.volume = currentVol;
+            }
+        }, 30); // Efeito dura ~450ms
+    }
+
+    function fadeIn() {
+        if (fadeInterval) clearInterval(fadeInterval);
+        // Recupera o volume original escolhido pelo utilizador
+        let targetVol = parseInt(localStorage.getItem("volume") || "100", 10) / 100;
+        audio.volume = 0;
+        let step = targetVol / 15;
+        
+        fadeInterval = setInterval(() => {
+            let newVol = audio.volume + step;
+            if (newVol >= targetVol) {
+                audio.volume = targetVol;
+                clearInterval(fadeInterval);
+            } else {
+                audio.volume = newVol;
+            }
+        }, 30);
+    }
+
+    // --- [FUNÇÕES DE MANIPULAÇÃO DE ÁUDIO E RESILIÊNCIA] --------------
 
     function handlePlayPause() { 
         if (audio.paused) {
+            isIntentionalPause = false; 
+            fadeIn(); // Sobe o volume de mansinho
             play(audio);
         } else {
-            pause(audio);
+            isIntentionalPause = true; 
+            fadeOut(() => { // Baixa o volume suavemente antes de pausar
+                pause(audio);
+            });
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
         }
     }
     
     function play(audio, newSource = null) {
-        isIntentionalPause = false;
         if (newSource) {
             audio.src = newSource;
         }
 
-        // 'once: true' — cada chamada registrava um listener novo que nunca
-        // era removido; qualquer 'canplay' posterior (re-buffer do stream ao
-        // vivo) religava o áudio mesmo depois de pausado (ex.: com a TV aberta)
-        audio.addEventListener('canplay', () => {
-            if (isIntentionalPause) return;
-            audio.play();
-            playButton.innerHTML = icons.pause;
-            playButton.classList.add("is-active");
-            document.body.classList.add("is-playing");
-        }, { once: true });
+        audio.play().catch(e => console.log("Aguardando interação...", e));
 
         if (!hasVisualizer) {
             visualizer(audio, visualizerContainer);
             hasVisualizer = true;
         }
-
-        audio.load();
     }
 
     function pause(audio) {
-        isIntentionalPause = true;
         audio.pause();
         playButton.innerHTML = icons.play;
         playButton.classList.remove("is-active");
         document.body.classList.remove("is-playing");
+    }
+
+    // --- [MELHORIA 1: FEEDBACK SPINNER (A CARREGAR)] --------------------
+
+    // Quando o áudio estiver a carregar/buffer, mostra o spinner a rodar
+    audio.addEventListener('waiting', () => {
+        playButton.innerHTML = icons.spinner;
+    });
+
+    // Quando a música finalmente começar a tocar limpa, troca para o botão de Pause
+    audio.addEventListener('playing', () => {
+        reconnectAttempts = 0;
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        
+        playButton.innerHTML = icons.pause;
+        playButton.classList.add("is-active");
+        document.body.classList.add("is-playing");
+    });
+
+    audio.addEventListener('error', handleConnectionDrop);
+    audio.addEventListener('stalled', handleConnectionDrop);
+
+    function handleConnectionDrop(event) {
+        if (isIntentionalPause) return; 
+
+        console.warn(`Instabilidade na rede detetada. A iniciar reconexão...`);
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
+
+        if (reconnectAttempts < 5) {
+            reconnectAttempts++;
+            const delay = reconnectAttempts * 2000; 
+            
+            reconnectTimeout = setTimeout(() => {
+                audio.load(); 
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(e => console.error("Falha ao reconectar:", e));
+                }
+            }, delay);
+        } else {
+            console.error("Muitas falhas seguidas. Parando reconexão automática.");
+            pause(audio);
+            isIntentionalPause = true;
+            reconnectAttempts = 0;
+        }
     }
 
     // --- [ÍCONES] ------------------------------------------------------
@@ -116,6 +224,9 @@
     const icons = { 
         play: '<svg class="i i-play" viewBox="0 0 24 24"><path d="m7 3 14 9-14 9z"></path></svg>',
         pause: '<svg class="i i-pause" viewBox="0 0 24 24"><path d="M5 4h4v16H5Zm10 0h4v16h-4Z"></path></svg>',
+        // Adicionámos o ícone de carregamento e o de download da APP
+        spinner: '<svg class="i i-spinner" viewBox="0 0 24 24"><path fill="currentColor" d="M12 22c5.523 0 10-4.477 10-10h-2a8 8 0 10-8 8v2z"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></path></svg>',
+        download: '<svg class="i i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 21h16"></path></svg>',
         facebook: '<svg class="i i-facebook" viewBox="0 0 24 24"><path d="M17 14h-3v8h-4v-8H7v-4h3V7a5 5 0 0 1 5-5h3v4h-3q-1 0-1 1v3h4Z"></path></svg>',
         twitter: '<svg class="i i-x" viewBox="0 0 24 24"><path d="m3 21 7.5-7.5m3-3L21 3M8 3H3l13 18h5Z"></path></svg>',
         instagram: '<svg class="i i-instagram" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"></circle><rect width="20" height="20" x="2" y="2" rx="5"></rect><path d="M17.5 6.5h0"></path></svg>',
@@ -177,40 +288,120 @@
             fftSize: container.dataset.fftSize || 2048,
             numBars: container.dataset.bars || 40,
             maxHeight: container.dataset.maxHeight || 255,
+            // "bars" = espectro em barras (onda quadrada); "wave" = forma de onda contínua (senoidal)
+            shape: container.dataset.shape === "wave" ? "wave" : "bars",
+            // fração da largura de cada barra usada como espaço vazio entre elas.
+            // Padrão 0 (barras coladas): é o que deixa o filtro gooey do layout
+            // clássico derreter as barras numa onda contínua. Quem quer barras
+            // separadas (VU do redesign, fundo do Aurora) declara data-gap.
+            gap: container.dataset.gap !== undefined ? parseFloat(container.dataset.gap) : 0,
+            // data-fit: escala as barras para a altura real do canvas (0-255 vira 0-100%).
+            // Sem isso a altura é usada em px brutos — certo para o visualizer de tela
+            // cheia do layout clássico, mas estoura caixas pequenas como o VU do redesign,
+            // que ficava permanentemente "cheio" com o áudio em volume normal.
+            fit: container.dataset.fit !== undefined,
         };
         const ctx = new AudioContext();
         const audioSource = ctx.createMediaElementSource(audio);
         const analyzer = ctx.createAnalyser();
         audioSource.connect(analyzer);
         audioSource.connect(ctx.destination);
+        if (options.fftSize) {
+            analyzer.fftSize = options.fftSize;
+        }
         const frequencyData = new Uint8Array(analyzer.frequencyBinCount);
+        const timeData = new Uint8Array(analyzer.fftSize);
         const canvas = initCanvas(container);
         const canvasCtx = canvas.getContext("2d");
 
+        let animationId = null;
+        let isRunning = false;
+
         const renderBars = () => {
             resizeCanvas(canvas, container);
-            analyzer.getByteFrequencyData(frequencyData);
-            if (options.fftSize) {
-                analyzer.fftSize = options.fftSize;
-            }
             canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
-            for (let i = 0; i < options.numBars; i++) {
-                const index = Math.floor((i + 10) * (i < options.numBars / 2 ? 2 : 1));
-                const fd = frequencyData[index];
-                const barHeight = Math.max(4, fd || 0) + options.maxHeight / 255;
-                const barWidth = canvas.width / options.numBars;
-                const x = i * barWidth;
-                const y = canvas.height - barHeight;
-                canvasCtx.fillStyle = "white";
-                canvasCtx.fillRect(x, y, barWidth + 1, barHeight);
-            }
-            requestAnimationFrame(renderBars);
-        };
-        renderBars();
 
-        // Listener del cambio de espacio en la ventana
-        window.addEventListener("resize", () => {
-            resizeCanvas(canvas, container);
+            if (options.shape === "wave") {
+                analyzer.getByteTimeDomainData(timeData);
+                const sliceWidth = canvas.width / (timeData.length - 1);
+                canvasCtx.strokeStyle = "white";
+                canvasCtx.lineWidth = 2;
+                canvasCtx.beginPath();
+                for (let i = 0; i < timeData.length; i++) {
+                    const y = (timeData[i] / 255) * canvas.height;
+                    const x = i * sliceWidth;
+                    if (i === 0) {
+                        canvasCtx.moveTo(x, y);
+                    } else {
+                        canvasCtx.lineTo(x, y);
+                    }
+                }
+                canvasCtx.stroke();
+            } else {
+                analyzer.getByteFrequencyData(frequencyData);
+                for (let i = 0; i < options.numBars; i++) {
+                    const index = Math.floor((i + 10) * (i < options.numBars / 2 ? 2 : 1));
+                    const fd = frequencyData[index];
+                    const barHeight = options.fit
+                        ? Math.max(2, ((fd || 0) / 255) * canvas.height)
+                        : Math.max(4, fd || 0) + options.maxHeight / 255;
+                    const barWidth = canvas.width / options.numBars;
+                    const gap = barWidth * options.gap;
+                    const x = i * barWidth;
+                    const y = canvas.height - barHeight;
+                    canvasCtx.fillStyle = "white";
+                    // sem gap, +1px de sobreposição evita frestas de anti-aliasing
+                    // entre barras vizinhas (mantém a silhueta da onda contínua)
+                    canvasCtx.fillRect(x + gap / 2, y, gap ? barWidth - gap : barWidth + 1, barHeight);
+                }
+            }
+
+            animationId = requestAnimationFrame(renderBars);
+        };
+
+        // Em telas pequenas o bargraph fica desligado para economizar bateria/CPU
+        // do celular. Usamos matchMedia (em vez de um único check no play()) para
+        // que isso reaja também quando a janela é redimensionada depois — ex.:
+        // testar breakpoints no devtools sem recarregar a página.
+        const mobileQuery = window.matchMedia("(max-width: 767px)");
+
+        function start() {
+            if (isRunning) return;
+            isRunning = true;
+            container.style.display = "";
+            renderBars();
+        }
+
+        function stop() {
+            isRunning = false;
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            container.style.display = "none";
+        }
+
+        function syncWithViewport() {
+            if (mobileQuery.matches) {
+                stop();
+            } else {
+                start();
+            }
+        }
+
+        syncWithViewport();
+        if (mobileQuery.addEventListener) {
+            mobileQuery.addEventListener("change", syncWithViewport);
+        } else {
+            mobileQuery.addListener(syncWithViewport);
+        }
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+                if (animationId) cancelAnimationFrame(animationId);
+            } else if (isRunning) {
+                renderBars();
+            }
         });
     };
 
@@ -224,25 +415,18 @@
         }
     
         try {
-            // 1. Tenta buscar no novo endpoint de busca primeiro
             dataFrom = await getDataFromSearch(artist, title, art, cover);
-    
-            // Se getDataFromSearch falhou e retornou #not-found, tenta o iTunes
             if (dataFrom.stream_url === "#not-found") {
-                console.warn("Novo endpoint falhou, buscando no iTunes...");
                 dataFrom = await getDataFromITunes(artist, title, art, cover);
             }
-    
         } catch (error) {
             console.error("Erro ao buscar dados:", error);
-            // 2. Em caso de erro geral, tenta o iTunes como último recurso
             dataFrom = await getDataFromITunes(artist, title, art, cover);
         }
     
         cache[cacheKey] = dataFrom;
         return dataFrom;
     }
-    
     
     async function getDataFromSearch(artist, title, defaultArt, defaultCover) {
         let text = artist ? `${artist} - ${title}` : title;
@@ -255,7 +439,7 @@
         try {
             const response = await fetch(`https://api.twj.es/search.php?query=${encodeURIComponent(text)}`);
             if (!response.ok) {
-                throw new Error(`Erro na requisição para o novo endpoint de busca. Status: ${response.status}`);
+                throw new Error(`Erro API busca. Status: ${response.status}`);
             }
             const data = await response.json();
     
@@ -272,24 +456,10 @@
                 cache[cacheKey] = results;
                 return results;
             } else {
-                console.log("Nenhum resultado encontrado no novo endpoint de busca.");
-                return {
-                    title,
-                    artist,
-                    art: defaultArt,
-                    cover: defaultCover,
-                    stream_url: "#not-found",
-                };
+                return { title, artist, art: defaultArt, cover: defaultCover, stream_url: "#not-found" };
             }
         } catch (error) {
-            console.error("Erro ao buscar dados do novo endpoint de busca:", error);
-            return {
-                title,
-                artist,
-                art: defaultArt,
-                cover: defaultCover,
-                stream_url: "#not-found",
-            };
+            return { title, artist, art: defaultArt, cover: defaultCover, stream_url: "#not-found" };
         }
     }
 
@@ -304,7 +474,7 @@
         try {
             const response = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(text)}&media=music&limit=1`);
             if (!response.ok) {
-                throw new Error(`Erro na requisição para o iTunes. Status: ${response.status}`);
+                throw new Error(`Erro iTunes. Status: ${response.status}`);
             }
             const data = await response.json();
 
@@ -314,94 +484,94 @@
                     title: itunesData.trackName || title,
                     artist: itunesData.artistName || artist,
                     thumbnail: itunesData.artworkUrl100 || defaultArt,
-                    art: itunesData.artworkUrl100
-                        ? changeImageSize(itunesData.artworkUrl100, "600x600")
-                        : defaultArt,
-                    cover: itunesData.artworkUrl100
-                        ? changeImageSize(itunesData.artworkUrl100, "1500x1500")
-                        : defaultCover,
-                    stream_url: itunesData.trackViewUrl || "#not-found", // Adicionado trackViewUrl
+                    art: itunesData.artworkUrl100 ? changeImageSize(itunesData.artworkUrl100, "600x600") : defaultArt,
+                    cover: itunesData.artworkUrl100 ? changeImageSize(itunesData.artworkUrl100, "1500x1500") : defaultCover,
+                    stream_url: itunesData.trackViewUrl || "#not-found",
                 };
                 cache[cacheKey] = results;
                 return results;
             } else {
-                console.log("Nenhum resultado encontrado no iTunes.");
-                return {
-                    title,
-                    artist,
-                    art: defaultArt,
-                    cover: defaultCover,
-                    stream_url: "#not-found",
-                };
+                return { title, artist, art: defaultArt, cover: defaultCover, stream_url: "#not-found" };
             }
         } catch (error) {
-            console.error("Erro ao buscar dados do iTunes:", error);
-            return {
-                title,
-                artist,
-                art: defaultArt,
-                cover: defaultCover,
-                stream_url: "#not-found",
-            };
+            return { title, artist, art: defaultArt, cover: defaultCover, stream_url: "#not-found" };
         }
     }
 
-
-    const getLyrics = async (artist, name) => {
-        // 1ª tentativa: lyrics.ovh (a API do Vagalume foi descontinuada)
-        try {
-            const response = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(name)}`);
-            const data = await response.json();
-            if (data && data.lyrics) {
-                return data.lyrics;
-            }
-            console.log("lyrics.ovh não encontrou a letra. Tentando LRCLIB...");
-        } catch (error) {
-            console.error("Erro na API lyrics.ovh:", error);
+    const getLyrics = (artist, name) => {
+        const cacheKey = `${artist} - ${name}`.toLowerCase();
+        // Cacheia a própria Promise (não só o resultado): se duas chamadas
+        // caírem para a mesma música quase ao mesmo tempo (evento SSE +
+        // enriquecimento do iTunes logo em seguida), a segunda reaproveita
+        // a requisição já em voo em vez de martelar as APIs de novo — foi
+        // isso que gerava os erros duplicados de CORS/"Failed to fetch" no console.
+        if (lyricsCache[cacheKey]) {
+            return lyricsCache[cacheKey];
         }
 
-        // Identificação de cliente que a documentação do LRCLIB pede
-        // (User-Agent não pode ser alterado pelo navegador; este é o equivalente)
-        const lrclibHeaders = { "Lrclib-Client": "RadioplayerApi (https://github.com/jailsonsb2/Radioplayer_api)" };
-
-        // 2ª tentativa: LRCLIB /api/get — match exato por assinatura.
-        // De propósito NÃO enviamos duration: quando presente, o LRCLIB exige
-        // match de ±2s e descartaria letras válidas
-        try {
-            const response = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(name)}`, { headers: lrclibHeaders });
-            if (response.ok) {
+        const fetchLyrics = async () => {
+            // 1ª tentativa: lyrics.ovh (a API do Vagalume foi descontinuada).
+            // Um 404 aqui é resultado normal (letra não catalogada), não um erro.
+            try {
+                const response = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(name)}`);
                 const data = await response.json();
-                const lyrics = data.plainLyrics || data.syncedLyrics;
-                if (lyrics) return lyrics;
+                if (data && data.lyrics) {
+                    return data.lyrics;
+                }
+                console.log("lyrics.ovh não encontrou a letra. Tentando LRCLIB...");
+            } catch (error) {
+                console.warn("lyrics.ovh indisponível, tentando LRCLIB...", error.message);
             }
-            console.log("LRCLIB /get não encontrou a letra. Tentando /search...");
-        } catch (error) {
-            console.error("Erro na API LRCLIB (/get):", error);
-        }
 
-        // 3ª tentativa: LRCLIB /api/search — busca por palavras-chave,
-        // tolera diferenças de grafia no título/artista
-        try {
-            const response = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(name)}&artist_name=${encodeURIComponent(artist)}`, { headers: lrclibHeaders });
-            if (!response.ok) throw new Error("LRCLIB não respondeu");
-            const results = await response.json();
-            const hit = Array.isArray(results) && results.find((r) => r.plainLyrics || r.syncedLyrics);
-            return (hit && (hit.plainLyrics || hit.syncedLyrics)) || "Letra no disponible";
-        } catch (error) {
-            console.error("Erro na API LRCLIB (/search):", error);
-            return "Letra no disponible";
-        }
+            // 2ª tentativa: LRCLIB /api/get — match exato por assinatura.
+            // De propósito NÃO enviamos duration: quando presente, o LRCLIB exige
+            // match de ±2s e descartaria letras válidas (a duração do iTunes nem
+            // sempre bate com a do registro deles). Sem duration o match é solto.
+            // Também de propósito SEM headers customizados: qualquer header extra
+            // força um preflight OPTIONS, e o LRCLIB às vezes não responde esse
+            // preflight corretamente — isso vira "Failed to fetch"/CORS no lugar
+            // de um simples 404, mesmo quando o /get em si funcionaria.
+            try {
+                const response = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(name)}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const lyrics = data.plainLyrics || data.syncedLyrics;
+                    if (lyrics) return lyrics;
+                }
+                console.log("LRCLIB /get não encontrou a letra. Tentando /search...");
+            } catch (error) {
+                console.warn("LRCLIB /get indisponível, tentando /search...", error.message);
+            }
+
+            // 3ª tentativa: LRCLIB /api/search — busca por palavras-chave,
+            // tolera diferenças de grafia no título/artista
+            try {
+                const response = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(name)}&artist_name=${encodeURIComponent(artist)}`);
+                if (!response.ok) throw new Error("LRCLIB não respondeu");
+                const results = await response.json();
+                const hit = Array.isArray(results) && results.find((r) => r.plainLyrics || r.syncedLyrics);
+                return (hit && (hit.plainLyrics || hit.syncedLyrics)) || "Letra não disponível";
+            } catch (error) {
+                // Nenhuma das 3 fontes respondeu (ou a música não tem letra
+                // catalogada em nenhuma delas) — isso é um resultado esperado,
+                // não uma falha da aplicação, então não sobe como console.error.
+                console.warn("Nenhuma fonte de letras respondeu para esta música.", error.message);
+                return "Letra não disponível";
+            }
+        };
+
+        const promise = fetchLyrics();
+        lyricsCache[cacheKey] = promise;
+        return promise;
     };
 
     function normalizeTitle(api) {
         let title;
         let artist;
       
-        // Verifica se a API retorna informações no formato "last_played"
         if (api.last_played) {
           title = api.last_played.song;
           artist = api.last_played.artist;
-        // Verifica se a API retorna informações diretamente em "song" e "artist"
         } else if (api.song && api.artist) {
           title = api.song;
           artist = api.artist;
@@ -426,50 +596,36 @@
           artist = api.currentArtist;
         }
       
-        return {
-          title,
-          artist,
-        };
+        return { title, artist };
     }
 
-
     function normalizeHistory(api) {
-        // A chave do histórico pode variar (song_history, history, etc.)
         const historyData = api.song_history || api.history || api.songHistory || [];
     
-        // Verificamos se o dado é de fato um array antes de processar
         if (!Array.isArray(historyData)) {
-            console.error("O histórico recebido não é um array:", historyData);
             return [];
         }
     
-        // A função setHistory já limita o resultado, mas podemos garantir aqui também.
         const history = historyData.slice(0, 10); 
       
         const historyNormalized = history.map((item) => {
           let artist = "";
           let song = "";
     
-          // 1. Verifica o NOVO FORMATO: { song: { title: '...', artist: '...' } }
           if (item.song && typeof item.song === 'object' && item.song.title) {
-            artist = item.song.artist || ""; // O artista pode ser uma string vazia
+            artist = item.song.artist || ""; 
             song = item.song.title;
           } 
-          // 2. Verifica formatos ANTIGOS (ex: { artist: '...', song: '...' })
           else if (item.song && typeof item.song === 'string') {
             artist = item.artist || "";
             song = item.song;
           }
-          // 3. Fallback para outros formatos possíveis (ex: { artist: '...', title: '...' })
           else if (item.title) {
              artist = item.artist || "";
              song = item.title;
           }
     
-          // Se não encontrou um nome de música, retorna nulo para filtrar depois
-          if (!song) {
-              return null;
-          }
+          if (!song) return null;
     
           return {
             artist: sanitizeText(artist),
@@ -477,25 +633,50 @@
           };
         });
       
-        // Filtra quaisquer itens que não puderam ser processados (retornaram null)
         return historyNormalized.filter(item => item !== null);
     }
 
-
     // --- [FUNÇÕES DE MANIPULAÇÃO DA INTERFACE] ------------------------
+
+    // A cor dominante crua da capa pode ser quase preta (agulha, vinil e play
+    // somem no escuro) ou clara/lavada demais (não marca no dial creme).
+    // Clampa em HSL para uma faixa sempre visível; capa sem cor nenhuma
+    // (P&B/cinza) devolve null e o layout fica com o --accent padrão dele.
+    function vividAccent(rgb) {
+        const r = rgb[0] / 255, g = rgb[1] / 255, b = rgb[2] / 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+        let l = (max + min) / 2;
+        let s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+        let h;
+        if (d === 0) h = 0;
+        else if (max === r) h = 60 * (((g - b) / d) % 6);
+        else if (max === g) h = 60 * ((b - r) / d + 2);
+        else h = 60 * ((r - g) / d + 4);
+        if (h < 0) h += 360;
+        if (s < 0.1) return null;
+        s = Math.max(s, 0.45);
+        l = Math.min(Math.max(l, 0.42), 0.68);
+        return `hsl(${Math.round(h)}, ${Math.round(s * 100)}%, ${Math.round(l * 100)}%)`;
+    }
 
     function setAccentColor(image, colorThief) {
         const dom = document.documentElement;
         const metaThemeColor = document.querySelector("meta[name=theme-color]");
+        const apply = () => {
+            const accent = vividAccent(colorThief.getColor(image));
+            if (accent) {
+                dom.style.setProperty("--accent", accent);
+            } else {
+                dom.style.removeProperty("--accent");
+            }
+            if (metaThemeColor) {
+                metaThemeColor.setAttribute("content", accent || "dark light");
+            }
+        };
         if (image.complete) {
-            dom.setAttribute("style", `--accent: rgb(${colorThief.getColor(image)})`);
-            metaThemeColor.setAttribute("content", `rgb(${colorThief.getColor(image)})`);
+            apply();
         } else {
-            console.log("imagen no completa");
-            image.addEventListener("load", function () {
-                dom.setAttribute("style", `--accent: rgb(${colorThief.getColor(image)})`);
-                metaThemeColor.setAttribute("content", `rgb(${colorThief.getColor(image)})`);
-            });
+            image.addEventListener("load", apply);
         }
     }
 
@@ -505,8 +686,15 @@
         $button.innerHTML = icons.tv + "Tv ao vivo";
         $button.addEventListener("click", () => {
             playerTvModal.classList.add("is-active");
+
             const wasPlaying = !audio.paused;
-            pause(audio);
+            // Pausa INTENCIONAL: sem esta flag o watchdog de reconexão
+            // (handleConnectionDrop) tratava a pausa como queda de rede e
+            // religava a rádio por cima do áudio da TV
+            isIntentionalPause = true;
+            if (reconnectTimeout) clearTimeout(reconnectTimeout);
+            fadeOut(() => pause(audio));
+
             const modalBody = playerTvModal.querySelector(".modal-body-video");
             const closeButton = playerTvModal.querySelector("[data-close]");
             const $iframe = document.createElement("iframe");
@@ -516,12 +704,11 @@
             // once: true — sem isso cada abertura da TV acumulava um listener
             closeButton.addEventListener("click", () => {
                 playerTvModal.classList.remove("is-active");
-
-                // al terminar de cerrar el modal, eliminar el iframe
                 $iframe.remove();
-
                 // Retoma a rádio (no ponto ao vivo) se estava tocando antes
                 if (wasPlaying) {
+                    isIntentionalPause = false;
+                    fadeIn();
                     play(audio, currentStation.stream_url);
                 }
             }, { once: true });
@@ -558,6 +745,103 @@
         }
     }
 
+    const WEEKDAY_CODES = ["dom", "seg", "ter", "qua", "qui", "sex", "sab"];
+
+    function toMinutes(hhmm) {
+        const [h, m] = hhmm.split(":").map(Number);
+        return h * 60 + m;
+    }
+
+    // Acha a faixa que cobre o instante `now`. Faixas overnight (end <= start,
+    // ex: 22:00-02:00) continuam ativas depois da virada do dia, quando o dia
+    // da semana já mudou para o dia seguinte — por isso também checa o dia
+    // anterior, não só item.days.includes(hoje).
+    function findActiveSlot(schedule, now) {
+        const day = now.getDay();
+        const todayCode = WEEKDAY_CODES[day];
+        const yesterdayCode = WEEKDAY_CODES[(day + 6) % 7];
+        const minutes = now.getHours() * 60 + now.getMinutes();
+        return schedule.find((item) => {
+            if (!item.days) return false;
+            const start = toMinutes(item.start);
+            const end = toMinutes(item.end);
+            const overnight = end <= start;
+            if (item.days.includes(todayCode)) {
+                if (overnight ? minutes >= start : minutes >= start && minutes < end) return true;
+            }
+            return overnight && item.days.includes(yesterdayCode) && minutes < end;
+        });
+    }
+
+    // Faixas de hoje para a lista "Programação", na ordem de início. Inclui a
+    // faixa overnight de ontem que ainda esteja ativa (madrugada), mesmo que
+    // ela não esteja marcada com o dia de hoje.
+    function getTodaySlots(schedule, now) {
+        const todayCode = WEEKDAY_CODES[now.getDay()];
+        const slots = schedule.filter((item) => item.days && item.days.includes(todayCode));
+        const active = findActiveSlot(schedule, now);
+        if (active && !slots.includes(active)) slots.push(active);
+        return slots.slice().sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+    }
+
+    function getScheduledProgram(station, now = new Date()) {
+        if (!station.programSchedule || !station.programSchedule.length) return null;
+        const slot = findActiveSlot(station.programSchedule, now);
+        if (!slot) return null;
+        return { time: `${slot.start} - ${slot.end}`, name: slot.name, description: slot.description };
+    }
+
+    // Só reconstrói o DOM de .player-program quando o conteúdo de fato muda,
+    // evitando flicker no setInterval que mantém a faixa em dia.
+    function renderProgram(station) {
+        if (!playerProgram) return;
+        const program = getScheduledProgram(station) || station.program;
+        const signature = program ? `${program.time || ""}|${program.name || ""}|${program.description || ""}` : "";
+        if (signature === lastProgramSignature) return;
+        lastProgramSignature = signature;
+        playerProgram.innerHTML = "";
+        createProgram(program);
+    }
+
+    function renderProgramacaoList(station) {
+        if (!programacaoButton || !programacaoList) return;
+        const schedule = station.programSchedule;
+        if (!schedule || !schedule.length) {
+            programacaoButton.hidden = true;
+            programacaoList.innerHTML = "";
+            return;
+        }
+        programacaoButton.hidden = false;
+        const now = new Date();
+        const activeSlot = findActiveSlot(schedule, now);
+        const $fragment = document.createDocumentFragment();
+        getTodaySlots(schedule, now).forEach((slot) => {
+            const $item = document.createElement("div");
+            $item.classList.add("programacao-item");
+            if (slot === activeSlot) $item.classList.add("is-active");
+            const $time = document.createElement("span");
+            $time.classList.add("programacao-item-time");
+            $time.textContent = `${slot.start} - ${slot.end}`;
+            $item.appendChild($time);
+            const $info = document.createElement("div");
+            $info.classList.add("programacao-item-info");
+            const $name = document.createElement("span");
+            $name.classList.add("programacao-item-name");
+            $name.textContent = slot.name || "";
+            $info.appendChild($name);
+            if (slot.description) {
+                const $description = document.createElement("span");
+                $description.classList.add("programacao-item-description");
+                $description.textContent = slot.description;
+                $info.appendChild($description);
+            }
+            $item.appendChild($info);
+            $fragment.appendChild($item);
+        });
+        programacaoList.innerHTML = "";
+        programacaoList.appendChild($fragment);
+    }
+
     function createSocialItem(url, icon) {
         const $a = document.createElement("a");
         $a.classList.add("player-social-item");
@@ -588,23 +872,17 @@
         }
         $button.addEventListener("click", () => {
             if ($button.classList.contains("is-active")) return;
-
-            // Eliminar la clase "active" del botón activo anterior, si existe
             if (activeButton) {
                 activeButton.classList.remove("is-active");
             }
-
-            // Agregar la clase "active" al botón actualmente presionado
             $button.classList.add("is-active");
-            activeButton = $button; // Actualizar el botón activo
+            activeButton = $button; 
 
             setAssetsInPage(station);
             play(audio, station.stream_url);
             if (history) {
                 history.innerHTML = "";
             }
-
-            // Llamar a la función de devolución de llamada (callback) si se proporciona
             if (typeof callback === "function") {
                 callback(station);
             }
@@ -622,8 +900,6 @@
             stationsList.appendChild($fragment);
         });
     }
-
-    // --- [ATUALIZA ELEMENTOS DA PÁGINA DA ESTAÇÃO] ------------------
 
     function setAssetsInPage(station) {
         playerSocial.innerHTML = "";
@@ -645,37 +921,23 @@
                 playerApps.appendChild(createAppsItem(station.apps[key], key));
             });
         }
-        if (station.program && playerProgram) {
-            createProgram(station.program);
-        }
+        lastProgramSignature = null;
+        renderProgram(station);
+        renderProgramacaoList(station);
         if (station.tv_url && playerTv) {
             createOpenTvButton(station.tv_url);
         }
     }
 
-    // --- [FUNÇÕES DE ATUALIZAÇÃO DE CONTEÚDO] ----------------------- 
-
     function mediaSession(data) {
         const { title, artist, album, art } = data;
         if ("mediaSession" in navigator) {
             navigator.mediaSession.metadata = new MediaMetadata({
-                title,
-                artist,
-                album,
-                artwork: [
-                    {
-                        src: art,
-                        sizes: "512x512",
-                        type: "image/png",
-                    },
-                ],
+                title, artist, album,
+                artwork: [{ src: art, sizes: "512x512", type: "image/png" }],
             });
-            navigator.mediaSession.setActionHandler("play", () => {
-                play();
-            });
-            navigator.mediaSession.setActionHandler("pause", () => {
-                pause();
-            });
+            navigator.mediaSession.setActionHandler("play", () => play(audio));
+            navigator.mediaSession.setActionHandler("pause", () => pause(audio));
         }
     }
 
@@ -684,82 +946,69 @@
         content.querySelector(".song-name").textContent = data.title;
         content.querySelector(".song-artist").textContent = data.artist;
         const artwork = content.querySelector(".player-artwork");
+
         if (artwork) {
             const $img = document.createElement("img");
             $img.src = data.art;
             $img.width = 600;
             $img.height = 600;
 
-            // Cuando la imagen se haya cargado, insertarla en artwork
+            $img.style.opacity = 0;
+            $img.style.position = "absolute";
+            $img.style.top = "0";
+            $img.style.left = "0";
+            $img.style.transition = "opacity 0.8s ease-in-out";
+
             $img.addEventListener("load", () => {
                 artwork.appendChild($img);
-
                 // eslint-disable-next-line no-undef
                 const colorThief = new ColorThief();
-
-                // Ejecutar cada vez que cambie la imagen
-                // Crear una imagen temporal para evitar errores de CORS
                 createTempImage($img.src).then((img) => {
                     setAccentColor(img, colorThief);
                 });
 
-                // Animar la imagen para desplazarla hacia la izquierda con transform
                 setTimeout(() => {
-                    artwork.querySelectorAll("img").forEach((img) => {
-                        // Establecer la transición
-                        img.style.transform = `translateX(${-img.width}px)`;
-
-                        // Esperar a que la animación termine
-                        img.addEventListener("transitionend", () => {
-                            // Eliminar todas las imágenes excepto la última
-                            artwork.querySelectorAll("img:not(:last-child)").forEach((img) => {
-                                img.remove();
-                            });
-                            img.style.transition = "none";
-                            img.style.transform = "none";
-                            setTimeout(() => {
-                                img.removeAttribute("style");
-                            }, 1000);
+                    $img.style.opacity = 1; 
+                    setTimeout(() => {
+                        artwork.querySelectorAll("img:not(:last-child)").forEach((oldImg) => {
+                            oldImg.remove();
                         });
-                    });
-                }, 100);
+                        $img.style.position = "relative";
+                    }, 800); 
+                }, 50);
             });
         }
+
         if (playerCoverImg) {
             const tempImg = new Image();
             tempImg.src = data.cover || data.art;
+            
             tempImg.addEventListener("load", () => {
-                playerCoverImg.style.opacity = 0;
-
-                // Esperar a que la animación termine
-                playerCoverImg.addEventListener("transitionend", () => {
+                playerCoverImg.style.transition = "opacity 0.4s ease-in-out";
+                playerCoverImg.style.opacity = 0; 
+                
+                setTimeout(() => {
                     playerCoverImg.src = data.cover || data.art;
-                    playerCoverImg.style.opacity = 1;
-                });
+                    playerCoverImg.style.transition = "opacity 0.8s ease-in-out";
+                    playerCoverImg.style.opacity = 1; 
+                }, 400); 
             });
         }
     }
 
     function setHistory(data, current, server) {
         if (!history) return;
-        history.innerHTML = historyTemplate.replace("{{art}}", pixel).replace("{{song}}", "Cargando historial...").replace("{{artist}}", "Artista").replace("{{stream_url}}", "#not-found");
+        history.innerHTML = historyTemplate.replace("{{art}}", pixel).replace("{{song}}", "Carregando historico...").replace("{{artist}}", "Artista").replace("{{stream_url}}", "#not-found");
         if (!data) return;
 
-        // max 10 items
         data = data.slice(0, 10);
         const promises = data.map(async (item) => {
             const { artist, song } = item;
             const { album, cover } = current;
-            const dataFrom = await getDataFrom({
-                artist,
-                title: song,
-                art: album,
-                cover,
-                server,
-            });
-            // Verifica se é Deezer e se stream_url é inválida
+            const dataFrom = await getDataFrom({ artist, title: song, art: album, cover, server });
+            
             if (server === 'deezer' && !dataFrom.stream_url) { 
-                dataFrom.stream_url = '#'; // Define como '#' para evitar link inválido
+                dataFrom.stream_url = '#'; 
             }
             return historyTemplate
                 .replace("{{art}}", dataFrom.thumbnail || dataFrom.art)
@@ -767,182 +1016,331 @@
                 .replace("{{artist}}", dataFrom.artist)
                 .replace("{{stream_url}}", dataFrom.stream_url);
         });
-        Promise.all(promises)
-            .then((itemsHTML) => {
-                const $fragment = document.createDocumentFragment();
-                itemsHTML.forEach((itemHTML) => {
-                    $fragment.appendChild(createElementFromHTML(itemHTML));
-                });
-                history.innerHTML = "";
-                history.appendChild($fragment);
-            })
-            .catch((error) => {
-                console.error("Error:", error);
+        Promise.all(promises).then((itemsHTML) => {
+            const $fragment = document.createDocumentFragment();
+            itemsHTML.forEach((itemHTML) => {
+                $fragment.appendChild(createElementFromHTML(itemHTML));
             });
+            history.innerHTML = "";
+            history.appendChild($fragment);
+        }).catch((error) => console.error("Error:", error));
     }
 
     function setLyrics(artist, title) {
         if (!lyricsContent) return;
-        getLyrics(artist, title)
-            .then((lyrics) => {
-                const $p = document.createElement("p");
-                $p.innerHTML = lyrics.replace(/\n/g, "<br>");
-                lyricsContent.innerHTML = "";
-                lyricsContent.appendChild($p);
-            })
-            .catch((error) => {
-                console.error("Error:", error);
-            });
+        getLyrics(artist, title).then((lyrics) => {
+            const $p = document.createElement("p");
+            $p.innerHTML = lyrics.replace(/\n/g, "<br>");
+            lyricsContent.innerHTML = "";
+            lyricsContent.appendChild($p);
+        }).catch((error) => console.error("Error:", error));
     }
 
-    // --- [INICIALIZAÇÃO DA APLICAÇÃO] -------------------------------
+    // --- [MELHORIA 3: LÓGICA DO BOTÃO INSTALAR PWA] -------------------
+    let deferredPrompt;
+    
+    // Ouve o evento do navegador que avisa "Estou pronto para ser instalado!"
+    window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        deferredPrompt = e; // Guarda o evento
+        showInstallButton(); // Revela o botão
+    });
+
+    function showInstallButton() {
+        let installBtn = document.getElementById('install-pwa-btn');
+        if (!installBtn) {
+            // Insere o botão no menu do topo, ao lado do botão de Histórico
+            const headerOptions = document.querySelector('.toggle-options');
+            if (headerOptions) {
+                installBtn = document.createElement('button');
+                installBtn.id = 'install-pwa-btn';
+                installBtn.className = 'btn';
+                installBtn.innerHTML = icons.download + 'Instalar App';
+                
+                installBtn.addEventListener('click', () => {
+                    // Dispara a pergunta nativa do telemóvel ("Quer adicionar ao ecrã principal?")
+                    deferredPrompt.prompt();
+                    deferredPrompt.userChoice.then((choiceResult) => {
+                        if (choiceResult.outcome === 'accepted') {
+                            installBtn.remove(); // Remove o botão depois de instalado com sucesso
+                        }
+                        deferredPrompt = null;
+                    });
+                });
+                
+                // Insere logo no início das opções
+                headerOptions.insertBefore(installBtn, headerOptions.firstChild);
+            }
+        }
+    }
+
+
+    // --- [ATUALIZAÇÃO EM TEMPO REAL: SSE COM FALLBACK PARA POLLING] ---
+    //
+    // A API padrão (twj.es/stream.php) fala SSE, mas station.api pode
+    // apontar para o endpoint JSON de um painel de terceiros (AzuraCast,
+    // Shoutcast/Icecast, etc.) que não sabe fazer streaming — só responde
+    // uma vez por requisição. Em vez de exigir que cada estação declare
+    // manualmente qual transporte usar, tentamos SSE primeiro e, se
+    // nenhuma mensagem chegar a tempo (ou a conexão falhar antes de
+    // funcionar alguma vez), trocamos sozinhos para consulta periódica
+    // (fetch em intervalo fixo, igual ao main_.js antigo).
+
+    async function processNowPlaying(res, server) {
+        if (res.error) {
+            console.error("Erro na API de now playing:", res.error);
+            return;
+        }
+
+        const currentData = normalizeTitle(res);
+        const title = currentData.title;
+
+        // O songtitle cru é estável entre o evento imediato e o
+        // enriquecido (iTunes) que a API envia logo em seguida —
+        // comparar o título normalizado processava a música 2x
+        const songKey = res.songtitle || title;
+        const artKey = res.albumArt || "";
+        if (currentSongPlaying === songKey && lastAlbumArt === artKey) {
+            return;
+        }
+        currentSongPlaying = songKey;
+        lastAlbumArt = artKey;
+
+        let artist = currentData.artist;
+        const art = currentStation.album;
+        const cover = currentStation.cover;
+        const historyList = normalizeHistory(res);
+
+        if (title && artist) {
+            let dataFrom;
+            if (res.albumArt) {
+                // A API já entrega capa/álbum prontos no payload;
+                // refazer a busca no search.php só atrasava a capa
+                dataFrom = {
+                    title: res.song || title,
+                    artist: res.artist || artist,
+                    album: res.album || "",
+                    thumbnail: res.albumArt,
+                    art: res.albumArt,
+                    cover: res.albumArt.replace("600x600", "1500x1500"),
+                    stream_url: res.streamUrl || "#not-found",
+                };
+                cache[`${dataFrom.artist} - ${dataFrom.title}`.toLowerCase()] = dataFrom;
+            } else {
+                dataFrom = await getDataFrom({
+                    artist, title, art, cover, server,
+                });
+            }
+
+            currentSong(dataFrom);
+            mediaSession(dataFrom);
+
+            const lyricsKey = `${dataFrom.artist} - ${dataFrom.title}`.toLowerCase();
+            if (lyricsKey !== lastLyricsKey) {
+                lastLyricsKey = lyricsKey;
+                setLyrics(dataFrom.artist, dataFrom.title);
+            }
+
+        } else {
+            // Áudio não reconhecido pela API (vinheta, spot, ID da rádio, etc.):
+            // sem isto a capa/nome da última música ficava "presos" na tela
+            // indefinidamente, dando a entender que ainda era a música tocando.
+            const fallback = {
+                title: currentStation.name,
+                artist: currentStation.description || "",
+                album: currentStation.name,
+                art,
+                cover: cover || art,
+                stream_url: "#not-found",
+            };
+            currentSong(fallback);
+            mediaSession(fallback);
+
+            lastLyricsKey = "";
+            if (lyricsContent) {
+                lyricsContent.innerHTML = "<p>Letra não disponível</p>";
+            }
+        }
+
+        setHistory(historyList, currentStation, server);
+    }
+
+    function stopRealtimeFeed() {
+        if (sseFallbackTimer) {
+            clearTimeout(sseFallbackTimer);
+            sseFallbackTimer = null;
+        }
+        if (sseConnection) {
+            sseConnection.close();
+            sseConnection = null;
+        }
+        if (pollTimeoutId) {
+            clearTimeout(pollTimeoutId);
+            pollTimeoutId = null;
+        }
+        // Invalida qualquer fetch em voo do loop antigo: sem isto, o
+        // .finally() dele reagendava o polling da estação anterior por
+        // cima do novo, e os dois loops ficavam disputando a tela
+        pollGeneration++;
+    }
+
+    function startPolling(apiUri, server) {
+        const myGeneration = ++pollGeneration;
+        function poll() {
+            fetch(apiUri)
+                .then((response) => response.json())
+                .then((res) => {
+                    if (myGeneration === pollGeneration) {
+                        return processNowPlaying(res, server);
+                    }
+                })
+                .catch((error) => console.error("Erro ao consultar a API:", error))
+                .finally(() => {
+                    if (myGeneration === pollGeneration) {
+                        pollTimeoutId = setTimeout(poll, TIME_TO_REFRESH);
+                    }
+                });
+        }
+        poll();
+    }
+
+    function startSSE(sseUri, pollUri, server) {
+        let sseWorked = false;
+        sseConnection = new EventSource(sseUri);
+
+        const fallbackToPolling = (reason) => {
+            if (sseFallbackTimer) {
+                clearTimeout(sseFallbackTimer);
+                sseFallbackTimer = null;
+            }
+            if (sseConnection) {
+                sseConnection.close();
+                sseConnection = null;
+            }
+            console.warn(reason);
+            startPolling(pollUri, server);
+        };
+
+        // Rede de segurança generosa (não é a detecção principal): a API padrão
+        // pode legitimamente levar dezenas de segundos até o primeiro push,
+        // porque depende do intervalo de metadata ICY do stream de origem.
+        // Só existe para o caso raro de o servidor aceitar a conexão e nunca
+        // mandar nada, nem erro nem dado.
+        sseFallbackTimer = setTimeout(() => {
+            if (!sseWorked) {
+                fallbackToPolling("SSE não respondeu a tempo, mudando para consulta periódica...");
+            }
+        }, SSE_FALLBACK_TIMEOUT);
+
+        sseConnection.onmessage = async function (event) {
+            sseWorked = true;
+            if (sseFallbackTimer) {
+                clearTimeout(sseFallbackTimer);
+                sseFallbackTimer = null;
+            }
+            try {
+                const res = JSON.parse(event.data);
+                await processNowPlaying(res, server);
+            } catch (err) {
+                console.error("Erro ao processar dados do EventSource:", err);
+            }
+        };
+
+        sseConnection.onerror = function () {
+            // Detecção principal: o navegador só chega a CLOSED (sem tentar
+            // reconectar sozinho) quando "falha a conexão" de vez — ex.:
+            // Content-Type errado, 404, CORS bloqueado. Isso é sinal forte de
+            // que o endpoint não fala SSE de verdade. Um soluço de rede comum
+            // deixa o EventSource em CONNECTING, tentando de novo sozinho —
+            // nesse caso não trocamos de transporte, só logamos e esperamos.
+            if (!sseWorked && sseConnection && sseConnection.readyState === EventSource.CLOSED) {
+                fallbackToPolling("Endpoint não parece suportar SSE, mudando para consulta periódica...");
+                return;
+            }
+            console.warn("A conexão em tempo real falhou. A aguardar retorno da rede...");
+        };
+    }
+
+    // --- [INICIALIZAÇÃO DA APLICAÇÃO] --------------------------------
 
     function initApp() {
-        // Variables para almacenar información que se actualizará
-        let currentSongPlaying;
-        let lastAlbumArt = "";
-        let lastLyricsKey = "";
-        let timeoutId;
         const json = window.streams || {};
         const stations = json.stations;
         currentStation = stations[0];
-    
-        // Establecer los assets de la página
+
         setAssetsInPage(currentStation);
-    
-        // Establecer la fuente de audio
         audio.src = currentStation.stream_url;
-    
-        // Define o evento de clique para o botão play/pause
+
         if (playButton !== null) {
             playButton.addEventListener("click", handlePlayPause);
         }
-         
-        // Iniciar o stream ( atualizado para evitar valor undefined )
+
         function init(current) {
-            // Cancelar o timeout anterior
-            if (timeoutId) clearTimeout(timeoutId);
-    
-            // Se a url da estação atual for diferente da estação atual, atualiza a informação
             if (currentStation.stream_url !== current.stream_url) {
                 currentStation = current;
             }
             const server = currentStation.server || "itunes";
-            const jsonUri = currentStation.api || API_URL + encodeURIComponent(current.stream_url);
-            fetch(jsonUri)
-                .then((response) => response.json())
-                .then(async (res) => {
-                    const currentData = normalizeTitle(res);
-                    const title = currentData.title;
+            // Estação com API própria (painel de terceiros): mesma URL para os
+            // dois casos, é o único endpoint que ela tem. API padrão (twj.es):
+            // SSE e polling são endpoints diferentes de propósito — ver
+            // API_URL_POLL acima.
+            const sseUri = currentStation.api || API_URL + encodeURIComponent(current.stream_url);
+            const pollUri = currentStation.api || API_URL_POLL + encodeURIComponent(current.stream_url);
 
-                    // O songtitle cru é estável entre a resposta imediata e a
-                    // enriquecida (iTunes) da API — comparar o título normalizado
-                    // processava a mesma música duas vezes
-                    const songKey = res.songtitle || title;
-                    const artKey = res.albumArt || "";
-                    if (currentSongPlaying === songKey && lastAlbumArt === artKey) {
-                        return;
-                    }
-                    currentSongPlaying = songKey;
-                    lastAlbumArt = artKey;
-
-                    let artist = currentData.artist;
-                    const art = currentStation.album;
-                    const cover = currentStation.cover;
-                    const history = normalizeHistory(res);
-
-                    // Verificar se o título e o artista não são undefined
-                    if (title && artist) {
-                        let dataFrom;
-                        if (res.albumArt) {
-                            // A API já entrega capa/álbum prontos na resposta;
-                            // refazer a busca no search.php só atrasava a capa
-                            dataFrom = {
-                                title: res.song || title,
-                                artist: res.artist || artist,
-                                album: res.album || "",
-                                thumbnail: res.albumArt,
-                                art: res.albumArt,
-                                cover: res.albumArt.replace("600x600", "1500x1500"),
-                                stream_url: res.streamUrl || "#not-found",
-                            };
-                            cache[`${dataFrom.artist} - ${dataFrom.title}`.toLowerCase()] = dataFrom;
-                        } else {
-                            dataFrom = await getDataFrom({
-                                artist,
-                                title,
-                                art,
-                                cover,
-                                server,
-                            });
-                        }
-
-                        // Estabelecer dados da música atual
-                        currentSong(dataFrom);
-                        mediaSession(dataFrom);
-
-                        const lyricsKey = `${dataFrom.artist} - ${dataFrom.title}`.toLowerCase();
-                        if (lyricsKey !== lastLyricsKey) {
-                            lastLyricsKey = lyricsKey;
-                            setLyrics(dataFrom.artist, dataFrom.title);
-                        }
-
-                        setHistory(history, currentStation, server);
-                    } else {
-                        console.log("Título ou artista undefined, não será feita a busca pela capa do álbum.");
-                    }
-                })
-                .catch((error) => console.log(error));
-            timeoutId = setTimeout(() => {
-                init(current);
-            }, TIME_TO_REFRESH);
+            stopRealtimeFeed();
+            if (SSE_ENABLED) {
+                startSSE(sseUri, pollUri, server);
+            } else {
+                startPolling(pollUri, server);
+            }
         }
-    
     
         init(currentStation);
         createStations(stations, currentStation, (station) => {
             init(station);
         });
+
+        // Mantém a faixa de programação em dia sem precisar recarregar a
+        // página (independente do TIME_TO_REFRESH, que é sobre metadata de música)
+        setInterval(() => {
+            if (!currentStation) return;
+            renderProgram(currentStation);
+            renderProgramacaoList(currentStation);
+        }, 30000);
+
         const nextStation = document.querySelector(".player-button-forward-step");
         const prevStation = document.querySelector(".player-button-backward-step");
+        // Só fazem sentido com mais de uma estação configurada — o HTML já
+        // vem com hidden por padrão para o caso comum de estação única.
+        if (stations.length > 1) {
+            if (nextStation) nextStation.hidden = false;
+            if (prevStation) prevStation.hidden = false;
+        }
         if (nextStation) {
             nextStation.addEventListener("click", () => {
                 const next = stationsList.querySelector(".is-active").nextElementSibling;
-                if (next) {
-                    next.click();
-                }
+                if (next) next.click();
             });
         }
         if (prevStation) {
             prevStation.addEventListener("click", () => {
                 const prev = stationsList.querySelector(".is-active").previousElementSibling;
-                if (prev) {
-                    prev.click();
-                }
+                if (prev) prev.click();
             });
         }
 
-        // --- [CONTROLE DE VOLUME] --------------------------------------
-    
         const range = document.querySelector(".player-volume");
         const rangeFill = document.querySelector(".player-range-fill");
         const rangeWrapper = document.querySelector(".player-range-wrapper");
         const rangeThumb = document.querySelector(".player-range-thumb");
         let currentVolume = parseInt(localStorage.getItem("volume") || "100", 10) || 100;
     
-        // Rango recorrido
-        function setRangeWidth(percent) {
-            rangeFill.style.width = `${percent}%`;
-        }
-    
-        // Posición del thumb
+        function setRangeWidth(percent) { rangeFill.style.width = `${percent}%`; }
         function setThumbPosition(percent) {
             const compensatedWidth = rangeWrapper.offsetWidth - rangeThumb.offsetWidth;
             const thumbPosition = (percent / 100) * compensatedWidth;
             rangeThumb.style.left = `${thumbPosition}px`;
         }
-    
-        // Actualiza el volumen al cambiar el rango
         function updateVolume(value) {
             range.value = value;
             setRangeWidth(value);
@@ -951,16 +1349,9 @@
             audio.volume = value / 100;
         }
     
-        // Valor inicial
         if (range !== null) {
             updateVolume(currentVolume);
-    
-            // Escucha el cambio del rango
-            range.addEventListener("input", (event) => {
-                updateVolume(parseInt(event.target.value, 10));
-            });
-    
-            // Escucha el click en el rango
+            range.addEventListener("input", (event) => updateVolume(parseInt(event.target.value, 10)));
             rangeWrapper.addEventListener("mousedown", (event) => {
                 const rangeRect = range.getBoundingClientRect();
                 const clickX = event.clientX - rangeRect.left;
@@ -968,14 +1359,9 @@
                 const value = Math.round((range.max - range.min) * (percent / 100)) + parseInt(range.min);
                 updateVolume(value);
             });
-    
-            // Escucha el movimiento del mouse
-            rangeThumb.addEventListener("mousedown", () => {
-                document.addEventListener("mousemove", handleThumbDrag);
-            });
+            rangeThumb.addEventListener("mousedown", () => document.addEventListener("mousemove", handleThumbDrag));
         }
     
-        // Mueve el thumb y actualiza el volumen
         function handleThumbDrag(event) {
             const rangeRect = range.getBoundingClientRect();
             const clickX = event.clientX - rangeRect.left;
@@ -985,13 +1371,7 @@
             updateVolume(value);
         }
     
-        // Deja de escuchar el movimiento del mouse
-        document.addEventListener("mouseup", () => {
-            document.removeEventListener("mousemove", handleThumbDrag);
-        });
-        
-        // --- [FIM DO CONTROLE DE VOLUME] -----------------------------
-    
+        document.addEventListener("mouseup", () => document.removeEventListener("mousemove", handleThumbDrag));
     }
 
     // --- [POP-UP DE INÍCIO E HANDLERS] --------------------------------
@@ -1013,20 +1393,17 @@
                         </a>
                         </div>`;
 
-
-        window.addEventListener("DOMContentLoaded", () => {
-            document.body.classList.remove("preload");
-            // Adiciona o event listener para iniciar o audio após primeiro click na tela
-            let hasClicked = false;
-            document.body.addEventListener('click', () => {
-                if (!hasClicked && !audio.playing) {
-                    handlePlayPause();
-                    hasClicked = true;
-                }
-            });
+    window.addEventListener("DOMContentLoaded", () => {
+        document.body.classList.remove("preload");
+        let hasClicked = false;
+        document.body.addEventListener('click', () => {
+            if (!hasClicked && audio.paused) {
+                handlePlayPause();
+                hasClicked = true;
+            }
         });
+    });
 
-    // --- [INICIALIZA A APLICAÇÃO] -------------------------------------
     initApp();
 
 })();

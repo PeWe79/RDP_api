@@ -1,217 +1,169 @@
 <!DOCTYPE html>
 <html lang="pt_BR">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,viewport-fit=cover" />
-        <title>Jailson Webradio</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com/" />
-        <link rel="preconnect" href="https://fonts.gstatic.com/" crossorigin />
-        <meta name="theme-color" content="dark light" />
-        <meta property="og:image" content="assets/jailson_cover.png" />
-        <meta property="og:image:type" content="image/png" />
-        <meta property="og:image:width" content="600" />
-        <meta property="og:image:height" content="600" />
-        <meta property="og:title" content="RadioPlayer" />
-        <meta property="og:description" content="Demo code!" />
-        <link rel="shortcut icon" href="assets/favicon.png" type="image/x-icon" />
-        <link rel="stylesheet" href="css/main.min.css" />
-        <link rel="stylesheet" href="custom.css" />
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/color-thief/2.3.0/color-thief.umd.js" defer=""></script>
-        <script src="js/main.js" defer></script>
-        <link href="manifest.json" rel="manifest" />
-        <script>
-            window.streams = {
-                timeRefresh: 10000,
-                stations: [
-                    {
-                        name: "Jailson Webradio",
-                        hash: "jailson",
-                        description: "Música sem parar",
-                        logo: "assets/jailson_logo.png",
-                        album:
-                            "assets/jailson_cover.png",
-                        cover:
-                            "assets/jailson_cover.png",
-                        api: "",
-                        stream_url: "https://stream.zeno.fm/yn65fsaurfhvv",
-                        tv_url: "https://eu1.servers10.com:2020/VideoPlayer/8106?autoplay=1",
-                        server: "",
-                        program: {
-                            time: "24/7",
-                            name: "Jailson Web Radio",
-                            description: "AO VIVO // ON AIR",
-                        },
-                        social: {
-                            whatsapp: "",
-                            twitter: "https://twitter.com/",
-                            tiktok: "",
-                            youtube: "",
-                            instagram: "https://www.instagram.com/",
-                        },
-                        apps: {
-                            android: "https://play.google.com/store/apps/details?id=com.jbcast.jwradio",
-                            ios: "",
-                        },
-                    },    
-                ],
-            };
-        </script>
-        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;700&amp;display=swap" rel="stylesheet" />
-        <link href="https://fonts.cdnfonts.com/css/akira-expanded" rel="stylesheet" />
-    </head>
-    <body class="preload">
-        <div class="app">
-            <img src="assets/default_logo.png" alt="cover" class="player-cover-image song-cover" height="100%" width="100%" />
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,viewport-fit=cover" />
+    <title>Radio Player</title>
+    <meta name="theme-color" content="dark light" />
+    <meta property="og:image" content="assets/jailson_cover.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="600" />
+    <meta property="og:image:height" content="600" />
+    <meta property="og:title" content="Radio Player" />
+    <meta property="og:description" content="Música sem parar" />
+    <link rel="shortcut icon" href="assets/favicon.png" type="image/x-icon" />
+    <link href="manifest.json" rel="manifest" />
 
-            <header class="header">
-                <div class="header-wrapper flex justify-between">
-                    <a class="header-logo" href="#site">
-                        <img class="header-logo-img" src="assets/radioplayer.svg" alt="logo" />
-                    </a>
+    <!-- All station + layout settings live in config.js -->
+    <script src="config.js"></script>
 
-                    <div class="toggle-options flex items-start">
-                        <button class="btn" data-outside="offcanvas-history">
-                            <svg class="i i-compact-disc" viewBox="0 0 24 24">
-                                <path d="M6 12a6 6 0 0 1 6-6"></path>
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <circle cx="12" cy="12" r="2"></circle>
-                            </svg>
-                            Historico
-                        </button>
-                        <!--button class="btn" data-outside="offcanvas-stations">
-                            <svg class="i i-list" viewBox="0 0 24 24">
-                                <circle cx="12" cy="12" r="2"></circle>
-                                <path d="M5 4.9a10 10 0 0 0 0 14.2M7.8 7.7a6 6 0 0 0 0 8.6m8.4 0a6 6 0 0 0 0-8.6M19 19.1a10 10 0 0 0 0-14.2"></path>
-                            </svg>
-                            Multiradio
-                        </button-->
-                        <button class="btn l:none" data-outside="mobile-menu">
-                            <svg class="i i-bars" viewBox="0 0 24 24">
-                                <path d="M3 6h18M3 12h18M3 18h18"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-            </header>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0a0a; }
+      #layout-frame { display: block; border: 0; width: 100%; height: 100%; }
 
-            <div class="player song-now scrollbar flex column">
-                <div class="player-wrapper">
-                    <div class="player-cover flex column items-center justify-center g-2 items-center">
-                        <div class="player-cover-title flex column items-center justify-center uppercase text-center">
-                            <span class="song-artist fw-700 station-description m:fs-4">Artist</span>
-                            <span class="song-name station-name fw-700 m:fs-2 fs-5 color-title">Song</span>
-                        </div>
-                        <div class="player-artwork relative">
-                            <img alt="artwork" height="600" src="assets/cover.png" width="600" />
-                            <div class="player-program"></div>
-                        </div>
+      /* seletor flutuante de layouts — mesmo vidro fosco/pílula translúcida
+         que os três layouts usam nos próprios botões (.btn / .rp-onair /
+         .deck-station), com o brilho ativo seguindo --vitrine-accent, que o
+         script abaixo sincroniza com o --accent (cor da capa) do layout
+         carregado no iframe. */
+      .vitrine-nav {
+        --vitrine-accent: #8b7cf0;
+        position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 99;
+        display: flex; gap: 2px; padding: 5px; border-radius: 999px;
+        background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.16);
+        backdrop-filter: blur(20px) saturate(160%); -webkit-backdrop-filter: blur(20px) saturate(160%);
+        box-shadow: 0 20px 45px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.12);
+        transition: box-shadow .4s ease;
+      }
+      .vitrine-nav[hidden] { display: none; }
+      .vitrine-nav button {
+        font: 600 12px/1 Montserrat, system-ui, sans-serif;
+        letter-spacing: .03em; white-space: nowrap;
+        color: rgba(255,255,255,.62); background: transparent; border: none;
+        padding: 10px 16px; border-radius: 999px; cursor: pointer;
+        transition: color .25s ease, background .25s ease, box-shadow .25s ease;
+      }
+      .vitrine-nav button:hover { color: #fff; background: rgba(255,255,255,.08); }
+      .vitrine-nav button.is-active {
+        color: #fff;
+        background: linear-gradient(135deg, var(--vitrine-accent), color-mix(in srgb, var(--vitrine-accent) 60%, #fff 15%));
+        box-shadow: 0 8px 22px -4px var(--vitrine-accent), inset 0 1px 0 rgba(255,255,255,.3);
+      }
+      @media (max-width: 480px) {
+        .vitrine-nav { top: auto; bottom: 14px; }   /* celular: topo é do player */
+        .vitrine-nav button { font-size: 11px; padding: 9px 13px; }
+      }
+    </style>
+  </head>
 
-                        <div class="player-controller">
-                            <div class="player-button player-button-volume">
-                                <button class="player-button player-button-volume-toggle" data-outside="player-volume">
-                                    <svg class="i i-volume-high" viewBox="0 0 24 24">
-                                        <path d="M6 9H2v6h4l5 4V5Zm9 7a5 5 0 0 0 0-8m3 12a10 10 0 0 0 0-16"></path>
-                                    </svg>
-                                </button>
-                                <div class="dropdown" id="player-volume">
-                                    <div class="player-range-wrapper">
-                                        <input aria-label="Volume" class="player-volume" max="100" min="0" name="player" type="range" value="100" />
-                                        <div class="player-range-fill"></div>
-                                        <div class="player-range-thumb"></div>
-                                    </div>
-                                </div>
-                            </div>
+  <body>
+    <nav class="vitrine-nav" id="vitrine-nav" aria-label="Escolher layout" hidden></nav>
+    <iframe id="layout-frame" title="Player" allow="autoplay"></iframe>
 
-                            <button class="player-button player-button-backward-step" hidden>
-                                <svg class="i i-backward-step" viewBox="0 0 24 24">
-                                    <path d="M6 5v14M18 4v16L8 12Z"></path>
-                                </svg>
-                            </button>
+    <script>
+      // ================================================================
+      // The layout ("version") is chosen in config.js:
+      //   window.streams.layout          -> which design to load
+      //   window.streams.layoutSwitcher  -> show/hide the floating pill
+      // Direct links also work: index.html?layout=<id>
+      // ================================================================
+      var LAYOUTS = [
+        { id: "retro",    nome: "Retrô Glass", file: "index-redesign.html" },
+        { id: "classico", nome: "Clássico",    file: "index-classic.html" },
+        { id: "aurora",   nome: "Aurora Deck", file: "index-alt.html" },
+      ];
+      // aliases aceitos em config.js / ?layout= (inglês ou português)
+      var ALIASES = { classic: "classico", redesign: "retro", alt: "aurora" };
 
-                            <button aria-label="Play/Pause" class="player-button player-button-play flex-none">
-                                <svg class="i i-play" viewBox="0 0 24 24">
-                                    <path d="m7 3 14 9-14 9z"></path>
-                                </svg>
-                            </button>
+      (function () {
+        var cfg = window.streams || {};
+        var SWITCHER = cfg.layoutSwitcher !== false; // default: visible
+        var LAYOUT_PADRAO = String(cfg.layout || "retro").toLowerCase();
 
-                            <button class="player-button player-button-forward-step" hidden>
-                                <svg class="i i-forward-step" viewBox="0 0 24 24">
-                                    <path d="M18 5v14M6 4v16l10-8Z"></path>
-                                </svg>
-                            </button>
+        var frame = document.getElementById("layout-frame");
+        var nav = document.getElementById("vitrine-nav");
 
-                            <button class="player-button player-button-lyrics" data-outside="modal-lyrics">
-                                <svg class="i i-list-music" viewBox="0 0 24 24">
-                                    <path d="M16 8h6V3h-6v15M2 3h9M2 8h9m-9 5h3"></path>
-                                    <circle cx="12" cy="18" r="4"></circle>
-                                </svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        function byId(id) {
+          if (!id) return null;
+          id = ALIASES[id] || id;
+          for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].id === id) return LAYOUTS[i];
+          return null;
+        }
+        function byFile(file) {
+          for (var i = 0; i < LAYOUTS.length; i++) if (LAYOUTS[i].file === file) return LAYOUTS[i];
+          return null;
+        }
 
-            <svg class="visualizer-filter">
-                <defs>
-                    <filter id="gooey" x="-30%" y="-30%" width="160%" height="160%">
-                        <feGaussianBlur in="SourceGraphic" stdDeviation="10" result="blur" />
-                        <feColorMatrix in="blur" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 35 -20" result="gooey" />
-                        <feComposite in="SourceGraphic" in2="gooey" operator="atop" />
-                    </filter>
-                </defs>
-            </svg>
-            <div class="visualizer"></div>
+        // botões do seletor (só quando o switcher está habilitado)
+        if (SWITCHER) {
+          nav.hidden = false;
+          LAYOUTS.forEach(function (l) {
+            var btn = document.createElement("button");
+            btn.textContent = l.nome;
+            btn.dataset.id = l.id;
+            btn.addEventListener("click", function () { show(l, true); });
+            nav.appendChild(btn);
+          });
+        }
 
-            <aside class="offcanvas scrollbar" id="offcanvas-stations">
-                <button data-close aria-label="close" class="btn">
-                    <svg class="i i-xmark" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
-                </button>
-                <div class="offcanvas-content">
-                    <div class="stations column flex g-1" id="stations"></div>
-                </div>
-            </aside>
+        function mark(l) {
+          if (!SWITCHER) return;
+          nav.querySelectorAll("button").forEach(function (b) {
+            b.classList.toggle("is-active", b.dataset.id === l.id);
+          });
+          try { localStorage.setItem("vitrine-layout", l.id); } catch (e) {}
+          var params = new URLSearchParams(location.search);
+          params.set("layout", l.id);
+          history.replaceState(null, "", "?" + params.toString());
+        }
 
-            <aside class="offcanvas scrollbar" id="offcanvas-history">
-                <button data-close aria-label="close" class="btn">
-                    <svg class="i i-xmark" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
-                </button>
-                <div class="offcanvas-content">
-                    <div class="stations column flex g-0.5" id="history"></div>
-                </div>
-            </aside>
-            <div class="modal" id="modal-lyrics">
-                <div class="modal-content">
-                    <div class="modal-title color-title flex items-center justify-between">
-                        <h2 class="modal-title-text m:fs-3 fs-5 fw-500">Letra</h2>
-                        <button data-close aria-label="close">
-                            <svg class="i i-xmark" viewBox="0 0 24 24">
-                                <path d="M18 6 6 18M6 6l12 12"></path>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="modal-body scrollbar" id="lyrics"></div>
-                </div>
-            </div>
-            <div class="modal-video" id="modal-tv">
-                <button data-close aria-label="close" class="btn">
-                    <svg class="i i-xmark" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"></path></svg>
-                </button>
-                <div class="modal-body-video"></div>
-            </div>
-            <div class="modal-overlay"></div>
-            <div class="mobile-menu" id="mobile-menu">
-                <footer class="footer">
-                    <div class="footer-wrapper column flex">
-                        <div class="footer-tv"></div>
-                        <div class="footer-app flex wrap g-0.75"></div>
-                        <div class="footer-copyright">
-                            <small><strong>© Jailson Webradio</strong> — contato@jailson.es</small>
-                        </div>
-                    </div>
-                </footer>
+        function show(l, reload) {
+          mark(l);
+          if (reload || !frame.src) frame.src = l.file;
+        }
 
-                <div class="player-social flex wrap"></div>
-            </div>
-        </div>
-    </body>
+        // acompanha a cor de destaque (--accent) que o main.js extrai da capa
+        // do álbum em cada layout, pra pílula ativa do seletor brilhar na
+        // mesma cor da página carregada em vez de ficar sempre roxa
+        var accentObserver = null;
+        function syncAccent() {
+          try {
+            var root = frame.contentDocument.documentElement;
+            var accent = getComputedStyle(root).getPropertyValue("--accent").trim();
+            nav.style.setProperty("--vitrine-accent", accent || "#8b7cf0");
+          } catch (e) {}
+        }
+
+        // espelha o título do layout ativo (o redesign o atualiza por estação)
+        frame.addEventListener("load", function () {
+          try {
+            var doc = frame.contentDocument;
+            // navegação interna entre layouts: re-sincroniza o seletor
+            var current = byFile(doc.location.pathname.split("/").pop());
+            if (current) mark(current);
+            document.title = doc.title || document.title;
+            var t = doc.querySelector("title");
+            if (t) new MutationObserver(function () {
+              document.title = doc.title;
+            }).observe(t, { childList: true });
+
+            syncAccent();
+            if (accentObserver) accentObserver.disconnect();
+            accentObserver = new MutationObserver(syncAccent);
+            accentObserver.observe(doc.documentElement, { attributes: true, attributeFilter: ["style"] });
+          } catch (e) {}
+        });
+
+        // escolha inicial: ?layout=  >  última escolha salva (se o switcher
+        // está habilitado)  >  config.js  >  primeiro da lista
+        var saved = null;
+        if (SWITCHER) {
+          try { saved = localStorage.getItem("vitrine-layout"); } catch (e) {}
+        }
+        var initial = byId(new URLSearchParams(location.search).get("layout"))
+          || byId(saved) || byId(LAYOUT_PADRAO) || LAYOUTS[0];
+        show(initial, true);
+      })();
+    </script>
+  </body>
 </html>

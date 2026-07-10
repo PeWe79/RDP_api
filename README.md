@@ -1,159 +1,162 @@
-## Single or Multi-Station Radio Player
+# Radio Player HTML5 — Single or Multi-Station, 3 Layouts, PWA
 
-This document provides a detailed guide on the structure, configuration, and customization of a single / multi-station radio player built with HTML, CSS, and JavaScript. This player dynamically fetches song information and offers the flexibility to use a local API or a pre-configured web-based API.
+A modern HTML5 radio player for Icecast / Shoutcast / Zeno.FM / Azuracast (and any stream with metadata), with real-time "now playing" info, song history, album art, lyrics, weekly program schedule, TV modal and Progressive Web App support.
 
+It ships with **three ready-to-use layouts ("versions")** sharing the same engine — you pick the one you want in a single config file.
 
 ## Demo Screenshots
 
 ![Demo Screenshot](https://i.imgur.com/oULEMgZ.jpeg)
 
+## Layouts / Versions
 
-### 1. Overview
+| id | File | Description |
+|---|---|---|
+| `retro` | `index-redesign.html` | **Retrô Glass** — new redesign: frosted glass, dynamic accent color extracted from the album art |
+| `classico` | `index-classic.html` | **Clássico** — the original player look |
+| `aurora` | `index-alt.html` | **Aurora Deck** — alternative deck-style UI |
 
-This radio player offers a user-friendly interface for enjoying online radio stations. It allows for the addition of multiple stations, each with its own live stream, song information, social media links, and more. Station configuration is done directly within the HTML, simplifying the customization process.
+All three read the same `config.js` and the same `js/main.js`, so switching layout never means reconfiguring your stations.
 
-### 2. File Structure
+### How to choose your version
 
-* **`index.html`:** Contains the main HTML for the player, including:
-    * Visual structure and interactive elements.
-    * Station configurations within a `<script>` tag.
-* **`js/main.js`:** Houses the JavaScript code that powers the player's functionality, including:
-    * Audio player management.
-    * Dynamic fetching and updating of song information (using local or web API).
-    * Rendering the station list.
-    * Control of interface elements like buttons, menus, and modals.
-* **`api.php`:** (Optional) PHP script acting as a local API to extract metadata from radio streams, providing song information.
-* **`css/main.min.css`:**  Defines the visual styling of the player, including layout, colors, and typography.
-* **`custom.css`:**  Allows for adding custom styles.
-* **`assets/`:**  Folder to store images, icons, and other visual assets.
+Everything is set in **`config.js`**:
 
-### 3. Detailed Configuration
-
-#### 3.1. Configuring Stations (`index.html`)
-
-Radio stations are configured within a `<script>` block in the `index.html` file, defining the `window.streams.stations` object. Each station is an object with the following properties:
-
-| Property | Description |
-|---|---|
-| `name` | Station name displayed on the interface. |
-| `hash` | Unique identifier for the station. |
-| `description` | Short description of the station. |
-| `logo` | Path to the station logo image file. |
-| `album` | Path to a default "album" image to display before the actual cover art is loaded. |
-| `cover` | Path to the currently playing song's cover art. |
-| `api` | **(Optional)** URL of the local API (`api.php`) configured to fetch station information. This should include the `stream_url` as a parameter. If left blank, the script will use the pre-configured web API within `js/main.js`. |
-| `stream_url` | URL of the station's audio stream. |
-| `tv_url` | URL of the station's live video stream (optional). |
-| `server` | Defines the music platform ("spotify" or "itunes") used to fetch additional info (if the corresponding API is in use). |
-| `program` | Object containing information about the current program (optional). |
-| `social` | Object with links to the station's social media profiles (optional). |
-| `apps` | Object with links to download the station's apps (optional). |
-
-**Configuration Example:**
-
-```html
-<script>
+```javascript
 window.streams = {
-    timeRefresh: 10000, // Refresh time in milliseconds
+    layout: "retro",        // "retro" | "classico" | "aurora"
+    layoutSwitcher: true,   // floating pill on index.html to switch layouts
+    timeRefresh: 10000,
+    stations: [ /* ... */ ],
+};
+```
+
+* **`layout`** — which design `index.html` loads by default. English aliases also work (`classic`, `redesign`, `alt`).
+* **`layoutSwitcher`** — set to `false` to hide the floating selector and lock visitors to the layout you chose; set to `true` to let them switch (their choice is remembered).
+* **Direct link:** `index.html?layout=aurora` opens a specific layout regardless of the default.
+* **Direct file:** you can also deploy/open `index-redesign.html`, `index-classic.html` or `index-alt.html` directly — each one works standalone.
+
+## Features
+
+* Current song, artist and album art, updated in real time (free metadata API included — no key required).
+* Song history with cover art.
+* Song lyrics via [lyrics.ovh](https://lyrics.ovh) with [LRCLIB](https://lrclib.net) fallback — no API key needed.
+* Weekly program schedule (`programSchedule`) with an automatic "on air now" indicator, plus a full schedule panel.
+* Dynamic accent color extracted from the current album art (Color Thief).
+* Live TV / video stream modal (`tv_url`), with the radio correctly paused while TV plays.
+* Media Session integration (lock-screen / notification controls with artwork).
+* Multiple stations in one player, with a station list and next/previous switching.
+* Audio visualizer, social links, app download links.
+* Responsive design + installable PWA.
+* Visual config generator: open **`gerador.html`** in your browser, fill in your stations and copy the ready-made `config.js`.
+
+## Quick Start
+
+1. Clone or download this repository.
+2. Edit **`config.js`** with your station(s) — or open **`gerador.html`** in a browser, fill the form and paste the generated result into `config.js`.
+3. Replace the images in `assets/` (logo, default cover, favicon) with your own.
+4. Upload everything to any static host — no PHP or build step required.
+
+```javascript
+// config.js — minimal example
+window.streams = {
+    layout: "retro",
+    layoutSwitcher: false,
+    timeRefresh: 10000,
     stations: [
         {
             name: "Example FM",
             hash: "examplefm",
             description: "The best music!",
-            logo: "assets/examplefm_logo.png",
-            album: "assets/default_album.jpg",
-            cover: "assets/default_album.jpg",
-            api: "api.php?url=https://example.com/stream", // Local API (optional)
+            logo: "assets/logo.png",
+            album: "assets/cover.png",
+            cover: "assets/cover.png",
+            api: "",                                    // empty = use the free web API
             stream_url: "https://example.com/stream",
-            server: "itunes", // Use iTunes API
-            social: {
-                facebook: "https://facebook.com/examplefm",
-                instagram: "https://instagram.com/examplefm"
-            }
+            server: "itunes",                           // "itunes" or "spotify" for extra art lookup
+            social: { instagram: "https://instagram.com/examplefm" },
         },
-        // ... more stations
-    ]
+    ],
 };
-</script>
 ```
 
-#### 3.2. Local API (Optional)
+## Station Configuration Reference
 
-If you choose to use the local API (`api.php`), follow these instructions to set it up:
+| Property | Required | Description |
+|---|---|---|
+| `name` | ✔ | Station name shown in the interface. |
+| `hash` | ✔ | Unique identifier for the station. |
+| `description` | ✔ | Short description / slogan. |
+| `logo` | ✔ | Path/URL of the station logo. |
+| `album` | ✔ | Default cover shown before the real album art loads. |
+| `cover` | ✔ | Fallback cover for the current song. |
+| `stream_url` | ✔ | Audio stream URL. |
+| `api` | | Custom metadata endpoint. Leave `""` to use the free built-in web API (`api.twj.es`). |
+| `server` | | `"spotify"` or `"itunes"` — extra source for album art lookup. |
+| `tv_url` | | Live video stream URL — enables the TV button/modal. |
+| `program` | | Fixed "on air" info: `{ time, name, description }`. Used when there is no `programSchedule`. |
+| `programSchedule` | | Weekly schedule (see below). Enables the "Programação" panel and the automatic "on air now" display. |
+| `social` | | Links: `facebook`, `instagram`, `twitter`, `whatsapp`, `tiktok`, `youtube`. |
+| `apps` | | App links: `android`, `ios`. |
 
-* **Configuration:** 
-    * In the `api.php` file, the `$allowedUrls` variable should list all allowed stream URLs.
-* **Functionality:**
-    * `getMp3StreamTitle()`: Extracts the song title from the stream metadata.
-    * `extractArtistAndSong()`:  Separates artist and song title.
-    * `getAlbumArt()`:  Fetches album art (currently set up to use the iTunes API). 
-    * `updateHistory()`:  Maintains a history of played songs. 
+### Weekly schedule format
 
-**Note:**
+```javascript
+programSchedule: [
+    // days: "dom", "seg", "ter", "qua", "qui", "sex", "sab"
+    { days: ["seg","ter","qua","qui","sex"], start: "06:00", end: "12:00", name: "Morning Show", description: "With John Doe" },
+    { days: ["dom","sab"],                   start: "18:00", end: "00:00", name: "Weekend Party", description: "Non stop music" },
+],
+```
 
-If the `api` field is left blank in the station configuration, will default to the pre-configured web API.  Make sure the web API you are using is functioning and correctly set up within the JavaScript code.
+The player highlights the slot that is on air right now and lists the full week in the schedule panel.
 
-### 4. Customization, Interface, Interaction, and Publication
+## File Structure
 
-The sections regarding:
-
-* **Customizing visual styles** (`css/main.min.css` and `custom.css`)
-* **Using custom images and icons** (`assets/`)
-* **User interface elements** (header, station selector, history, etc.)
-* **User navigation and interaction** 
-* **Publishing the player to a web server** 
-
-#### 4.1. Key Elements
-
-* **Header:** Displays the station logo and buttons for accessing the history, station list, and mobile menu. 
-* **Player Section:** Contains the album art, song information (artist and title), playback controls (play/pause, next/previous station), and volume control.
-* **Visualizer:** A simple audio visualizer that responds dynamically to the music.
-* **Off-Canvas Sidebar:**
-    * **Station List:** Displays all available stations with thumbnails.
-    * **History:** Shows a history of recently played songs.
-* **Lyrics Modal:** Displays the lyrics of the currently playing song (if available through the Vagalume API).
-
-#### 4.2. Navigation
-
-* **Station Selection:** Click on a station in the station list to begin playback.
-* **Song History:** Access the history through the button in the header.
-* **Song Lyrics:** Click the "Lyrics" button to open the lyrics modal.
-* **Mobile Menu:** The menu button in the header provides access to the same functionality on mobile devices.
-
-### 5. Customization
-
-#### 5.1. Visual Styles (`css/main.min.css` and `custom.css`)
-
-* Colors, fonts, spacing, element sizes, and other visual properties can be customized by editing the CSS rules.
-
-#### 5.2.  Images and Icons (`assets/`)
-
-* Replace the default images in the `assets` folder with your own to customize the station logo, album art, and icons.
-
-### 6. Publication
-
-1. Make sure the local API (`api.php`), if used, is configured correctly and accessible on your server.
-2. Upload all files and folders (HTML, CSS, JavaScript, PHP, images) to your web server. 
+* **`config.js`** — all your settings (layout choice + stations). The only file you need to edit.
+* **`index.html`** — loader: reads `config.js`, shows the chosen layout (and the optional layout switcher).
+* **`index-redesign.html` / `index-classic.html` / `index-alt.html`** — the three layouts (each also works standalone).
+* **`gerador.html`** — visual generator for `config.js` (runs locally in your browser).
+* **`js/main.js`** — the shared player engine (audio, metadata polling/SSE, lyrics, history, schedule, media session).
+* **`css/main.min.css`, `custom.css`, `rp-redesign.css`, `css/alt.css`** — styles per layout.
+* **`assets/`** — images and icons.
 
 ## Free Hosting
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/jailsonsb2/Radioplayer_api)
 [![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/jailsonsb2/Radioplayer_api)
 
-### 7. Additional Considerations
+## Radio Metadata API
 
-* **Copyright:**  Ensure that you have the rights to use all images, music, and other content used in your radio player.
-* **Stream Metadata:** The accuracy of song information is dependent on the quality of the metadata provided by the radio station's stream. 
+Get real-time metadata from online radio streams — free, no key required. Leave the station's `api` field empty to use it automatically.
 
+### Available Endpoints
 
+* `/start_monitoring/` **(GET):** Starts monitoring a radio stream. You must start monitoring before retrieving information.
+    - **Required parameter:** `radio_url` — the URL of the radio stream.
+* `/get_stream_title/` **(GET):** Retrieves the current song's title and album art from the radio stream.
+    - **Required parameter:** `url` — the URL of the radio stream.
+* `/radio_info/` **(GET):** Real-time information about the station, including the current song and recent history.
+    - **Required parameter:** `radio_url` — the URL of the radio stream.
+* `/radio_history/` **(GET):** Full song history from the database for a given station.
+    - **Required parameter:** `radio_url`; **optional:** `limit`.
 
+**Example:** `https://twj.es/radio_info/?radio_url=https://example.com/stream`
 
+## Contributing
+
+1. Fork the project.
+2. Create a branch for your feature (`git checkout -b feature/new-feature`).
+3. Commit your changes (`git commit -am 'Add new feature'`).
+4. Push to the branch (`git push origin feature/new-feature`).
+5. Create a new Pull Request.
 
 ---
 
 ## 📜 History
 
 First published in mid-2024, this project descends from one of the first open-source "now playing" metadata APIs for web radio players written in plain PHP ([RadioplayerAPI](https://github.com/jailsonsb2/RadioplayerAPI), June 2024). The response format it introduced — `songtitle`, `artist`, `song`, `source`, `song_history` — has since been widely adopted across the web radio ecosystem, including by third-party commercial products.
+
 ---
 
 ## ⚖️ License

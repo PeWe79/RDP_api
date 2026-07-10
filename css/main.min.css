@@ -6,7 +6,7 @@
     --bg-transparent: rgb(255 255 255 / 10%);
     --bg-modal: rgb(255 255 255 / 20%);
     --bg-dark: rgb(0 0 0 / 75%);
-    --bg-gradient: linear-gradient(140deg, #a92bcd, #439bc1);
+    --bg-gradient: linear-gradient(140deg, #2b9acd, #2c18ad);
     --color-title: #ffffff;
     --color-text: rgb(255 255 255 / 50%);
     --duration: 0.3s;
@@ -284,7 +284,6 @@ strong {
 }
 @media (max-width: 991px) {
     .header {
-        background: var(--accent, var(--bg-gradient));
         box-shadow: var(--shadow-l);
     }
     .toggle-options {
@@ -367,7 +366,6 @@ strong {
         height: 100vh;
         padding-top: calc(2rem + 72px);
         z-index: 40;
-        background: var(--accent, var(--bg-gradient));
         transition: transform var(--duration);
         width: 100%;
     }
