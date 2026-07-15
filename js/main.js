@@ -140,9 +140,21 @@
 
     // --- [FUNÇÕES DE MANIPULAÇÃO DE ÁUDIO E RESILIÊNCIA] --------------
 
-    function handlePlayPause() { 
+    // A rádio e um vídeo do YouTube nunca tocam juntos: dar play na rádio
+    // pausa qualquer embed em reprodução (o caminho inverso é tratado pelo
+    // watcher de mensagens do modo clipe)
+    function pauseYouTubeEmbeds() {
+        document.querySelectorAll('iframe[src*="youtube"]').forEach((frame) => {
+            try {
+                frame.contentWindow.postMessage(JSON.stringify({ event: "command", func: "pauseVideo", args: [] }), "*");
+            } catch (e) {}
+        });
+    }
+
+    function handlePlayPause() {
         if (audio.paused) {
-            isIntentionalPause = false; 
+            pauseYouTubeEmbeds();
+            isIntentionalPause = false;
             fadeIn(); // Sobe o volume de mansinho
             play(audio);
         } else {
