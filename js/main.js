@@ -1065,6 +1065,8 @@
             ".rpclip-fab:hover { background: rgba(255,255,255,.18); }",
             ".rpclip-fab.is-active { border-color: var(--accent, #4dd7e0); color: var(--accent, #4dd7e0); }",
             ".rpclip-fab svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }",
+            ".player-button-clip { display: inline-flex; align-items: center; justify-content: center; }",
+            ".player-button-clip.is-active { color: var(--accent, #4dd7e0) !important; }",
             ".rpclip-dock { position: fixed; z-index: 141; right: 16px; bottom: 140px; width: min(420px, calc(100vw - 32px)); border-radius: 16px; overflow: hidden; background: rgba(13,17,23,.96); border: 1px solid rgba(255,255,255,.16); box-shadow: 0 24px 60px rgba(0,0,0,.55); }",
             ".rpclip-dock header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; color: #fff; font: 700 13px/1.3 system-ui, sans-serif; }",
             ".rpclip-dock header span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
@@ -1075,16 +1077,32 @@
         document.head.appendChild(style);
     }
 
-    // O botão só aparece quando a API demonstra suportar o campo
+    // O botão só aparece quando a API demonstra suportar o campo.
+    // Integrado ao painel de controles: nasce ao lado do botão de letras
+    // herdando as classes dele, então cada layout o estiliza nativamente
+    // (círculo no aurora, ícone do redesign etc). Layout sem botão de
+    // letras cai para um botão flutuante.
     function ensureClipButton() {
         injectClipStyles();
-        if (document.querySelector(".rpclip-fab")) return;
+        if (document.querySelector(".player-button-clip, .rpclip-fab")) return;
+
+        const clipSvg = '<svg class="i" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="3"></rect><path d="m10 9 5 3-5 3z"></path></svg>';
+        const lyricsButton = document.querySelector(".player-button-lyrics");
 
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = "rpclip-fab";
+        if (lyricsButton) {
+            btn.className = lyricsButton.className.replace("player-button-lyrics", "player-button-clip");
+            btn.innerHTML = clipSvg;
+            lyricsButton.insertAdjacentElement("afterend", btn);
+        } else {
+            btn.className = "rpclip-fab";
+            btn.innerHTML = clipSvg + "Clipe";
+            document.body.appendChild(btn);
+        }
+
         btn.title = "Modo clipe: mostra o clipe da música que está tocando";
-        btn.innerHTML = '<svg viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="3"></rect><path d="m10 9 5 3-5 3z"></path></svg>Clipe';
+        btn.setAttribute("aria-label", "Clipe da música");
         btn.classList.toggle("is-active", clipModeOn());
 
         btn.addEventListener("click", () => {
@@ -1094,8 +1112,6 @@
             if (turningOn && clipTrack) openClip(clipTrack);
             else if (!turningOn) closeClip(true);
         });
-
-        document.body.appendChild(btn);
     }
 
     function pauseRadioForClip() {
