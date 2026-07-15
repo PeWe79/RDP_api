@@ -465,9 +465,10 @@
     
             if (data.results) {
                 const searchResults = data.results;
+                // O ICY é lei: a busca só fornece capa/link, nunca renomeia
                 const results = {
-                    title: searchResults.title || title,
-                    artist: searchResults.artist || artist,
+                    title,
+                    artist,
                     thumbnail: searchResults.artwork || defaultArt,
                     art: searchResults.artwork || defaultArt,
                     cover: searchResults.artwork || defaultCover,
@@ -500,9 +501,10 @@
 
             if (data.resultCount > 0) {
                 const itunesData = data.results[0];
+                // O ICY é lei: o iTunes só fornece capa/link, nunca renomeia
                 const results = {
-                    title: itunesData.trackName || title,
-                    artist: itunesData.artistName || artist,
+                    title,
+                    artist,
                     thumbnail: itunesData.artworkUrl100 || defaultArt,
                     art: itunesData.artworkUrl100 ? changeImageSize(itunesData.artworkUrl100, "600x600") : defaultArt,
                     cover: itunesData.artworkUrl100 ? changeImageSize(itunesData.artworkUrl100, "1500x1500") : defaultCover,
