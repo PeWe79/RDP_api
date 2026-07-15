@@ -154,6 +154,9 @@
     function handlePlayPause() {
         if (audio.paused) {
             pauseYouTubeEmbeds();
+            // Voltar para a rádio desliga o modo clipe — sem isso, a próxima
+            // troca de música reabria o vídeo por cima do áudio
+            exitClipMode();
             isIntentionalPause = false;
             fadeIn(); // Sobe o volume de mansinho
             play(audio);
@@ -1201,6 +1204,15 @@
         else clipWasRadioPlaying = false;
     }
 
+    // Sai do modo clipe (persistindo a escolha e atualizando o botão)
+    function exitClipMode() {
+        if (!clipModeOn()) return;
+        localStorage.setItem("clipMode", "0");
+        const btn = document.querySelector(".player-button-clip, .rpclip-fab");
+        if (btn) btn.classList.remove("is-active");
+        closeClip(false);
+    }
+
     function handleClipTrack(res, dataFrom) {
         const yt = (res && (res.youtubeId || res.youtube_id)) || "";
         const np = (res && res.now_playing) || {};
@@ -1239,6 +1251,10 @@
         } else if (state === 2 || state === 0) { // pausado ou terminou
             clipPlayingSet.delete(id);
             if (clipPlayingSet.size === 0) resumeRadioAfterClip();
+            // Pausa MANUAL do vídeo (2) = o usuário escolheu o áudio: sai do
+            // modo clipe para a troca de música não reabrir o vídeo. Vídeo
+            // que TERMINOU (0) mantém o modo — o próximo clipe deve abrir.
+            if (state === 2) exitClipMode();
         }
     });
 
