@@ -66,7 +66,7 @@ When the metadata API returns a **`youtubeId`** field in the now-playing payload
 
 The included free metadata API (twj.es) already resolves the clips server-side, with long-lived caching.
 
-## Quick Start
+## How do I set up my radio? (Quick Start)
 
 1. Clone or download this repository.
 2. Edit **`config.js`** with your station(s) — or open **`gerador.html`** in a browser, fill the form and paste the generated result into `config.js`.
