@@ -156,7 +156,12 @@
     
     function play(audio, newSource = null) {
         if (newSource) {
-            audio.src = newSource;
+            audio.src = newSource; // atribuir src já dispara o load
+        } else if (audio.paused) {
+            // Stream AO VIVO: sem o load() o navegador retoma do buffer,
+            // do ponto em que foi pausado — o ouvinte fica defasado da
+            // transmissão. O load() descarta o buffer e reconecta ao vivo.
+            audio.load();
         }
 
         audio.play().catch(e => console.log("Aguardando interação...", e));
@@ -1036,6 +1041,179 @@
         }).catch((error) => console.error("Error:", error));
     }
 
+    // --- [MODO CLIPE: vídeo da música via youtubeId da API] --------------
+    // Quando o now-playing entrega o youtubeId, um botão "Clipe" flutuante
+    // aparece; ligado, um mini-player mostra o clipe da música sincronizado
+    // com a rádio (start = elapsed) e troca o embed a cada faixa. Pausar o
+    // vídeo retoma a rádio; dar play pausa. Botão, dock e CSS são injetados
+    // por aqui — layout-agnóstico, funciona nos três layouts sem tocar
+    // no HTML de cada um.
+
+    let clipTrack = null;
+    let lastClipShownId = null;
+    let clipWasRadioPlaying = false;
+    const clipPlayingSet = new Set();
+
+    const clipModeOn = () => localStorage.getItem("clipMode") === "1";
+
+    function injectClipStyles() {
+        if (document.getElementById("rpclip-styles")) return;
+        const style = document.createElement("style");
+        style.id = "rpclip-styles";
+        style.textContent = [
+            ".rpclip-fab { position: fixed; z-index: 140; right: 16px; bottom: 88px; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 999px; border: 1px solid rgba(255,255,255,.25); background: rgba(13,17,23,.8); color: #fff; font: 600 12px/1 system-ui, sans-serif; letter-spacing: .06em; cursor: pointer; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); transition: background .2s ease; }",
+            ".rpclip-fab:hover { background: rgba(255,255,255,.18); }",
+            ".rpclip-fab.is-active { border-color: var(--accent, #4dd7e0); color: var(--accent, #4dd7e0); }",
+            ".rpclip-fab svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }",
+            ".rpclip-dock { position: fixed; z-index: 141; right: 16px; bottom: 140px; width: min(420px, calc(100vw - 32px)); border-radius: 16px; overflow: hidden; background: rgba(13,17,23,.96); border: 1px solid rgba(255,255,255,.16); box-shadow: 0 24px 60px rgba(0,0,0,.55); }",
+            ".rpclip-dock header { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; color: #fff; font: 700 13px/1.3 system-ui, sans-serif; }",
+            ".rpclip-dock header span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+            ".rpclip-dock header button { flex: none; width: 28px; height: 28px; border: none; border-radius: 50%; background: rgba(255,255,255,.1); color: #fff; cursor: pointer; transition: background .2s ease; }",
+            ".rpclip-dock header button:hover { background: rgba(255,255,255,.22); }",
+            ".rpclip-dock iframe { width: 100%; aspect-ratio: 16/9; display: block; border: 0; }",
+        ].join("\n");
+        document.head.appendChild(style);
+    }
+
+    // O botão só aparece quando a API demonstra suportar o campo
+    function ensureClipButton() {
+        injectClipStyles();
+        if (document.querySelector(".rpclip-fab")) return;
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "rpclip-fab";
+        btn.title = "Modo clipe: mostra o clipe da música que está tocando";
+        btn.innerHTML = '<svg viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="3"></rect><path d="m10 9 5 3-5 3z"></path></svg>Clipe';
+        btn.classList.toggle("is-active", clipModeOn());
+
+        btn.addEventListener("click", () => {
+            const turningOn = !clipModeOn();
+            localStorage.setItem("clipMode", turningOn ? "1" : "0");
+            btn.classList.toggle("is-active", turningOn);
+            if (turningOn && clipTrack) openClip(clipTrack);
+            else if (!turningOn) closeClip(true);
+        });
+
+        document.body.appendChild(btn);
+    }
+
+    function pauseRadioForClip() {
+        if (audio.paused) return;
+        clipWasRadioPlaying = true;
+        isIntentionalPause = true;
+        if (reconnectTimeout) clearTimeout(reconnectTimeout);
+        fadeOut(() => pause(audio));
+    }
+
+    function resumeRadioAfterClip() {
+        if (clipWasRadioPlaying && audio.paused) {
+            isIntentionalPause = false;
+            fadeIn();
+            play(audio);
+        }
+        clipWasRadioPlaying = false;
+    }
+
+    function openClip(track) {
+        if (lastClipShownId === track.id) return;
+        lastClipShownId = track.id;
+
+        pauseRadioForClip();
+
+        // Sincroniza com a rádio: o clipe começa no ponto em que a música
+        // está (elapsed da API + tempo desde a resposta). Aproximado: o
+        // stream tem atraso de buffer e o clipe pode ser outra versão.
+        let start = 0;
+        if (track.elapsed) {
+            start = Math.floor(track.elapsed + (Date.now() - track.receivedAt) / 1000);
+            if (track.duration && start >= track.duration - 5) start = 0;
+            if (start < 8) start = 0;
+        }
+
+        let dock = document.querySelector(".rpclip-dock");
+        if (!dock) {
+            dock = document.createElement("div");
+            dock.className = "rpclip-dock";
+            const header = document.createElement("header");
+            const title = document.createElement("span");
+            const close = document.createElement("button");
+            close.type = "button";
+            close.textContent = "✕";
+            close.setAttribute("aria-label", "Fechar clipe");
+            close.addEventListener("click", () => closeClip(true));
+            header.appendChild(title);
+            header.appendChild(close);
+            dock.appendChild(header);
+            document.body.appendChild(dock);
+        }
+        dock.querySelector("header span").textContent = `${track.title} — ${track.artist}`;
+
+        const oldFrame = dock.querySelector("iframe");
+        if (oldFrame) oldFrame.remove();
+
+        const iframe = document.createElement("iframe");
+        iframe.src = `https://www.youtube-nocookie.com/embed/${track.id}?autoplay=1&enablejsapi=1` + (start ? `&start=${start}` : "");
+        iframe.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+        iframe.allowFullscreen = true;
+        iframe.title = `Clipe: ${track.title}`;
+        // handshake do widget: o player passa a emitir eventos de estado
+        iframe.addEventListener("load", () => {
+            iframe.contentWindow.postMessage(JSON.stringify({ event: "listening", id: "clip", channel: "widget" }), "*");
+        });
+        dock.appendChild(iframe);
+    }
+
+    function closeClip(resumeRadio) {
+        const dock = document.querySelector(".rpclip-dock");
+        if (dock) dock.remove();
+        lastClipShownId = null;
+        clipPlayingSet.clear();
+        if (resumeRadio) resumeRadioAfterClip();
+        else clipWasRadioPlaying = false;
+    }
+
+    function handleClipTrack(res, dataFrom) {
+        const yt = (res && (res.youtubeId || res.youtube_id)) || "";
+        const np = (res && res.now_playing) || {};
+        clipTrack = yt ? {
+            id: yt,
+            title: dataFrom.title,
+            artist: dataFrom.artist,
+            elapsed: np.elapsed || 0,
+            duration: np.duration || 0,
+            receivedAt: Date.now(),
+        } : null;
+
+        if (yt) ensureClipButton();
+        if (!clipModeOn()) return;
+
+        if (clipTrack) openClip(clipTrack);
+        else closeClip(true); // música sem clipe: volta para a rádio
+    }
+
+    // Eventos de estado do player do YouTube: pausar o vídeo retoma a
+    // rádio; dar play de novo pausa a rádio
+    window.addEventListener("message", (event) => {
+        let host = "";
+        try { host = new URL(event.origin).hostname; } catch (e) { return; }
+        if (!/(^|\.)youtube(-nocookie)?\.com$/.test(host)) return;
+
+        let payload;
+        try { payload = JSON.parse(event.data); } catch (e) { return; }
+        const state = payload && payload.info && typeof payload.info.playerState === "number" ? payload.info.playerState : null;
+        if (state === null) return;
+
+        const id = payload.id || "clip";
+        if (state === 1) { // tocando
+            clipPlayingSet.add(id);
+            pauseRadioForClip();
+        } else if (state === 2 || state === 0) { // pausado ou terminou
+            clipPlayingSet.delete(id);
+            if (clipPlayingSet.size === 0) resumeRadioAfterClip();
+        }
+    });
+
     // --- [MELHORIA 3: LÓGICA DO BOTÃO INSTALAR PWA] -------------------
     let deferredPrompt;
     
@@ -1134,6 +1312,7 @@
 
             currentSong(dataFrom);
             mediaSession(dataFrom);
+            handleClipTrack(res, dataFrom);
 
             const lyricsKey = `${dataFrom.artist} - ${dataFrom.title}`.toLowerCase();
             if (lyricsKey !== lastLyricsKey) {
@@ -1155,6 +1334,8 @@
             };
             currentSong(fallback);
             mediaSession(fallback);
+            // vinheta/spot não tem clipe: fecha o vídeo e volta para a rádio
+            handleClipTrack(res, fallback);
 
             lastLyricsKey = "";
             if (lyricsContent) {

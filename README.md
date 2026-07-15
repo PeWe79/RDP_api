@@ -46,6 +46,19 @@ window.streams = {
 * Audio visualizer, social links, app download links.
 * Responsive design + installable PWA.
 * Visual config generator: open **`gerador.html`** in your browser, fill in your stations and copy the ready-made `config.js`.
+* 🎬 **Clip mode** — watch the music video of the song that is playing, synchronized with the radio (see below).
+
+## 🎬 Clip Mode (music video of the current song)
+
+When the metadata API returns a **`youtubeId`** field in the now-playing payload, a floating **"Clipe"** button automatically appears (feature-detected — if your API doesn't send the field, the button never shows). With clip mode on:
+
+* a floating mini-player opens with the **music video of the song that is playing** — the radio pauses and the video audio takes over;
+* the video starts **synchronized with the radio position** (`start = elapsed` from the API) instead of from zero;
+* every song change just swaps the embed to the new clip; songs without a clip close the video and fall back to the radio automatically;
+* pausing the video resumes the radio, playing it again pauses the radio (YouTube IFrame postMessage — no external library);
+* the preference is remembered, and it works in all three layouts with zero markup changes (button, mini-player and styles are injected by `js/main.js`).
+
+The included free metadata API (twj.es) already resolves the clips server-side, with long-lived caching.
 
 ## Quick Start
 
