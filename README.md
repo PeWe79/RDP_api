@@ -1,6 +1,12 @@
-# Radio Player HTML5 — Single or Multi-Station, 3 Layouts, PWA
+# 🎵 Radio Player HTML5 — Single or Multi-Station, 3 Layouts, PWA
 
-A modern HTML5 radio player for Icecast / Shoutcast / Zeno.FM / Azuracast (and any stream with metadata), with real-time "now playing" info, song history, album art, lyrics, weekly program schedule, TV modal and Progressive Web App support.
+[![Live Demo](https://img.shields.io/badge/▶_Live_Demo-online-brightgreen)](https://jailsonsb2.github.io/Radioplayer_api/)
+[![No API Key](https://img.shields.io/badge/API_key-not_required-orange)](#)
+[![PWA Ready](https://img.shields.io/badge/PWA-installable-5A0FC8)](#)
+
+**[▶ Try the live demo](https://jailsonsb2.github.io/Radioplayer_api/)** — a modern **HTML5 radio player** for Icecast / Shoutcast / Zeno.FM / Azuracast (and any stream with metadata), with real-time "now playing" info, song history, album art, lyrics, **YouTube clip mode**, weekly program schedule, TV modal and Progressive Web App support.
+
+> 🇧🇷 **Player de rádio para o seu site com 3 visuais prontos** (Retrô Glass, Clássico e Aurora Deck) — grátis e sem chave de API. Multi-estação, música tocando agora com capa, letra, clipe do YouTube sincronizado, programação semanal e app instalável. Escolha o layout num único arquivo de configuração.
 
 It ships with **three ready-to-use layouts ("versions")** sharing the same engine — you pick the one you want in a single config file.
 
@@ -166,6 +172,17 @@ Base URL: `https://api.twj.es`
 ## 📜 History
 
 First published in mid-2024, this project descends from one of the first open-source "now playing" metadata APIs for web radio players written in plain PHP ([RadioplayerAPI](https://github.com/jailsonsb2/RadioplayerAPI), June 2024). The response format it introduced — `songtitle`, `artist`, `song`, `source`, `song_history` — has since been widely adopted across the web radio ecosystem, including by third-party commercial products.
+
+## Related Projects
+
+More free radio players from the same author:
+
+| Project | Style |
+|---|---|
+| [**RadioPlayer**](https://github.com/jailsonsb2/RadioPlayer) | Full-page player for any stream (free now-playing API, YouTube clip mode) |
+| [**bottom_radioplayer**](https://github.com/jailsonsb2/bottom_radioplayer) | **Bottom-bar component** — the audio never stops while visitors navigate |
+| [**RadioPlayer-ZenoRadio**](https://github.com/jailsonsb2/RadioPlayer-ZenoRadio) | Full-page player for **Zeno.FM** streams (SSE metadata) |
+| [**metadados**](https://github.com/jailsonsb2/metadados) | The free **now playing API** (ICY metadata + iTunes + YouTube clips) |
 
 ---
 
